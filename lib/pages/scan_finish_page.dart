@@ -29,6 +29,72 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   final List<_GroupEntry> _groups = [];
   bool _finishing = false;
 
+  String? _baseLotNo;
+  List<String> _currentLots = [];
+  bool _loadingLots = true;
+
+  int _runSuffix(String lotNo) {
+    final m = RegExp(r'-(\d+)$').firstMatch(lotNo.trim());
+    if (m == null) return 1 << 30;
+    return int.tryParse(m.group(1)!) ?? (1 << 30);
+  }
+
+  String? _pickBaseLotFromAllLots() {
+    final all = widget.allLots
+        .map((x) => (x['lot_no']?.toString() ?? '').trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (all.isEmpty) return null;
+    all.sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+    return all.first; // ✅ base = run_no เล็กสุด
+  }
+
+  Future<void> _loadCurrentLotsFromSummary() async {
+    // base lot จาก list ที่ส่งเข้ามา
+    _baseLotNo ??= _pickBaseLotFromAllLots();
+
+    try {
+      final res = await ApiService.getSummaryByTkId(widget.tkId);
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode == 200) {
+        final transfers = (body['transfers'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+
+        final fromSet = <String>{};
+        final toSet = <String>{};
+
+        for (final t in transfers) {
+          final fromLot = (t['from_lot_no']?.toString() ?? '').trim();
+          final toLot = (t['to_lot_no']?.toString() ?? '').trim();
+          if (fromLot.isNotEmpty) fromSet.add(fromLot);
+          if (toLot.isNotEmpty) toSet.add(toLot);
+        }
+
+        // ✅ leaf lots = toSet - fromSet
+        final leaf = toSet.difference(fromSet).toList();
+        leaf.sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+
+        if (mounted) {
+          setState(() {
+            _currentLots = leaf.isNotEmpty
+                ? leaf
+                : (_baseLotNo != null ? [_baseLotNo!] : []);
+            _loadingLots = false;
+          });
+        }
+        return;
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _currentLots = _baseLotNo != null ? [_baseLotNo!] : [];
+        _loadingLots = false;
+      });
+    }
+  }
+
   List<Map<String, dynamic>> _parts = [];
   bool _loadingParts = true;
 
@@ -52,20 +118,19 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   void initState() {
     super.initState();
     _loadParts();
+    _loadCurrentLotsFromSummary(); // ✅ เพิ่ม
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       setState(() {
-        _ensureOneGroup(); // ✅ ต้องมีอย่างน้อย 1 group เพราะ backend ต้องรับ groups[]
+        _ensureOneGroup();
       });
     });
   }
 
   bool get _isSimpleFlow {
-    final lots = widget.allLots
-        .map((l) => (l['lot_no']?.toString() ?? '').trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
-    return lots.length <= 1; // ✅ lot 0-1 ถือว่าเข้า1ออก1
+    final lots = _currentLots.where((s) => s.trim().isNotEmpty).toList();
+    if (lots.isEmpty) return true;
+    return lots.length <= 1;
   }
 
   void _ensureOneGroup() {
@@ -222,10 +287,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
   @override
   Widget build(BuildContext context) {
-    final lots = widget.allLots
-        .map((l) => l['lot_no']?.toString() ?? '')
-        .where((s) => s.isNotEmpty)
-        .toList();
+    final lots = _currentLots; // ✅ เอาไปทำต่อได้จริง (leaf lots)
 
     final canAddGroup = !_isSimpleFlow && _remainingGood() > 0;
     return Scaffold(
@@ -244,7 +306,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             _InfoCard(
               tkId: widget.tkId,
               tkDoc: widget.tkDoc,
-              allLots: widget.allLots,
+              baseLotNo: _baseLotNo,
+              currentLots: lots,
             ),
             const SizedBox(height: 16),
 
@@ -278,11 +341,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                             keyboardType: TextInputType.number,
                             onChanged: (_) {
                               setState(() {
-                                if (_isSimpleFlow) {
-                                  _ensureOneGroup();
+                                _ensureOneGroup();
+                                if (_groups.length == 1) {
                                   _groups[0].qtyCtrl.text = _goodQty()
                                       .abs()
-                                      .toString(); // ✅ group1 = good เสมอ
+                                      .toString(); // ✅ realtime ตาม good
                                 }
                               });
                             },
@@ -610,7 +673,7 @@ class _GroupCard extends StatefulWidget {
 
 class _GroupCardState extends State<_GroupCard> {
   _GroupEntry get g => widget.entry;
-
+  bool get _canCoId => widget.availableLots.length >= 2;
   final _tfLabels = {1: '1 - Master ID', 2: '2 - Split ID', 3: '3 - Co-ID'};
   final _tfColors = {1: Colors.blue, 2: Colors.purple, 3: Colors.teal};
 
@@ -636,16 +699,37 @@ class _GroupCardState extends State<_GroupCard> {
     required String? value,
     required ValueChanged<String?> onChanged,
   }) {
+    final parts = widget.availableParts;
+
     return DropdownButtonFormField<String>(
       value: value,
+      isExpanded: true,
+      menuMaxHeight: 320,
       decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 14,
+        ),
       ),
       hint: const Text('เลือก Part No'),
-      isExpanded: true,
-      menuMaxHeight: 320,
-      items: widget.availableParts.map((p) {
+
+      // ✅ ตอนเลือกแล้วโชว์บรรทัดเดียว กัน overflow
+      selectedItemBuilder: (context) {
+        return parts.map((p) {
+          final pNo = p['part_no']?.toString() ?? '';
+          final pName = p['part_name']?.toString() ?? '';
+          final text = pName.isEmpty ? pNo : '$pNo • $pName';
+          return Align(
+            alignment: Alignment.centerLeft,
+            child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+          );
+        }).toList();
+      },
+
+      // ✅ เมนู dropdown ยังโชว์ 2 บรรทัดได้
+      items: parts.map((p) {
         final pNo = p['part_no']?.toString() ?? '';
         final pName = p['part_name']?.toString() ?? '';
         return DropdownMenuItem<String>(
@@ -670,6 +754,7 @@ class _GroupCardState extends State<_GroupCard> {
           ),
         );
       }).toList(),
+
       onChanged: onChanged,
     );
   }
@@ -677,6 +762,21 @@ class _GroupCardState extends State<_GroupCard> {
   @override
   Widget build(BuildContext context) {
     final color = _tfColors[g.tfRsCode] ?? Colors.grey;
+
+    // ✅ ถ้า lot < 2 แล้วค่าดันเป็น Co-ID อยู่ ให้เด้งกลับเป็น Master อัตโนมัติ
+    if (!_canCoId && g.tfRsCode == 3) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          g.tfRsCode = 1;
+          g.outPartNoMerge = null;
+          g.mergeLots
+            ..clear()
+            ..addAll([_MergeLotEntry(), _MergeLotEntry()]);
+        });
+        widget.onChanged();
+      });
+    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -718,22 +818,29 @@ class _GroupCardState extends State<_GroupCard> {
             ),
             const SizedBox(height: 12),
 
-            // ── Transfer Type ──────────────────────────────────────
             DropdownButtonFormField<int>(
               value: g.tfRsCode,
               decoration: const InputDecoration(
                 labelText: 'Transfer Type',
                 border: OutlineInputBorder(),
               ),
-              items: _tfLabels.entries
-                  .map(
-                    (e) => DropdownMenuItem(value: e.key, child: Text(e.value)),
-                  )
-                  .toList(),
+              items: [
+                DropdownMenuItem(value: 1, child: Text(_tfLabels[1]!)),
+                DropdownMenuItem(value: 2, child: Text(_tfLabels[2]!)),
+                DropdownMenuItem(
+                  value: 3,
+                  enabled: _canCoId, // ✅ lot < 2 => ปิด Co-ID
+                  child: Text(
+                    _canCoId ? _tfLabels[3]! : '3 - Co-ID (ต้องมี lot ≥ 2)',
+                    style: TextStyle(color: _canCoId ? null : Colors.grey),
+                  ),
+                ),
+              ],
               onChanged: (v) => setState(() {
                 g.tfRsCode = v ?? 1;
                 g.fromLotNo = null;
                 g.outPartNo = null;
+                g.outPartNoMerge = null;
                 _autoLockFromLot();
                 widget.onChanged();
               }),
@@ -1113,28 +1220,86 @@ class _MergeLotRow extends StatelessWidget {
 class _InfoCard extends StatelessWidget {
   final String tkId;
   final Map<String, dynamic> tkDoc;
-  final List<Map<String, dynamic>> allLots;
+  final String? baseLotNo;
+  final List<String> currentLots;
 
   const _InfoCard({
     required this.tkId,
     required this.tkDoc,
-    required this.allLots,
+    required this.baseLotNo,
+    required this.currentLots,
   });
+
+  bool _looksLikeLotNo(String s) => RegExp(r'^\d{6}-').hasMatch(s.trim());
+
+  Map<String, String> _parsePartFromLot(String lotNo) {
+    var lot = lotNo.trim();
+
+    // ตัด -RUNNO ท้ายสุด เช่น -00000000000141
+    final mRun = RegExp(r'-(\d+)$').firstMatch(lot);
+    if (mRun != null) {
+      lot = lot.substring(0, mRun.start);
+    }
+
+    // ตัด prefix วันที่ YYMMDD-
+    if (lot.length > 7 && lot[6] == '-') {
+      lot = lot.substring(7);
+    }
+
+    final segs = lot.split('-');
+    final idxSpace = segs.indexWhere((x) => x.contains(' '));
+
+    // ถ้าไม่เจอ space เลย แปลว่า parse ไม่ได้ชัวร์
+    if (idxSpace <= 0) {
+      return {'part_no': '', 'part_name': ''};
+    }
+
+    final partNo = segs.take(idxSpace).join('-').trim();
+    final partName = segs.skip(idxSpace).join('-').trim();
+    return {'part_no': partNo, 'part_name': partName};
+  }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ คำนวณก่อน return (ห้ามไปใส่ใน children)
-    final rawNo = (tkDoc['part_no']?.toString() ?? '').trim();
-    final cleanedNo = rawNo
-        .replaceAll(RegExp(r'\s*(\.\-|•\s*\-)\s*$'), '')
-        .trim();
+    // ✅ current lot = เอา lot ที่ทำต่อได้จริง (leaf) ตัวแรก
+    final firstLot = (baseLotNo ?? tkDoc['lot_no']?.toString() ?? '').trim();
 
-    final rawName = (tkDoc['part_name']?.toString() ?? '').trim();
-    final cleanedName = (rawName == '-' ? '' : rawName);
+    // ✅ current lot = เอา lot ที่ทำต่อได้จริง (leaf) ตัวแรก (ไว้โชว์ใน list ด้านล่าง)
+    final currentLot = currentLots.isNotEmpty
+        ? currentLots.first.trim()
+        : (tkDoc['lot_no']?.toString() ?? baseLotNo ?? '').trim();
 
-    final partLine = cleanedName.isEmpty
-        ? cleanedNo
-        : '$cleanedNo • $cleanedName';
+    // ค่าจาก tkDoc
+    var partNo = (tkDoc['part_no']?.toString() ?? '').trim();
+    var partName = (tkDoc['part_name']?.toString() ?? '').trim();
+
+    // ✅ ถ้า partNo ดันเป็น lot_no (ขึ้นต้นด้วย YYMMDD-) ให้แปลงกลับเป็น part_no/part_name
+    if (_looksLikeLotNo(partNo)) {
+      final parsed = _parsePartFromLot(partNo);
+      partNo = parsed['part_no'] ?? '';
+      partName = parsed['part_name'] ?? '';
+    }
+
+    // ✅ ถ้า partName ยังว่าง แต่มี currentLot → ลอง parse จาก currentLot
+    // ✅ ถ้า partName ยังว่าง → ลอง parse จาก firstLot ก่อน (lot แรกของเอกสาร)
+    if (partName.isEmpty && _looksLikeLotNo(firstLot)) {
+      final parsed = _parsePartFromLot(firstLot);
+      partNo = partNo.isNotEmpty ? partNo : (parsed['part_no'] ?? '');
+      partName = parsed['part_name'] ?? '';
+    }
+
+    // ถ้ายังว่างอีก ค่อย fallback ไป currentLot
+    if (partName.isEmpty && _looksLikeLotNo(currentLot)) {
+      final parsed = _parsePartFromLot(currentLot);
+      partNo = partNo.isNotEmpty ? partNo : (parsed['part_no'] ?? '');
+      partName = parsed['part_name'] ?? '';
+    }
+
+    final staId = (tkDoc['op_sta_id']?.toString() ?? '-').trim();
+    final staName = (tkDoc['op_sta_name']?.toString() ?? '-').trim();
+
+    final mcId = (tkDoc['MC_id']?.toString() ?? '-').trim();
+    final mcName = (tkDoc['MC_name']?.toString() ?? '-').trim();
 
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1154,21 +1319,28 @@ class _InfoCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
 
-            Text('Part: $partLine'),
+            Text('Part No: ${partNo.isEmpty ? '-' : partNo}'),
+            Text('Part Name: ${partName.isEmpty ? '-' : partName}'),
+            Text('Lot No: ${firstLot.isEmpty ? '-' : firstLot}'),
+            if (baseLotNo != null && baseLotNo!.trim().isNotEmpty)
+              Text(
+                'Base Lot: ${baseLotNo!.trim()}',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+              ),
 
-            Text(
-              'Station: ${tkDoc['op_sta_id'] ?? '-'} (${tkDoc['op_sta_name'] ?? '-'})',
-            ),
+            const SizedBox(height: 4),
+            Text('Station: $staId ($staName)'),
+            Text('Machine: $mcId ($mcName)'),
 
-            if (allLots.isNotEmpty) ...[
+            if (currentLots.isNotEmpty) ...[
               const Divider(height: 16),
               const Text(
-                'Lots ในถาดนี้:',
+                'Lots (current):',
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 4),
-              ...allLots.map(
-                (l) => Padding(
+              ...currentLots.map(
+                (lot) => Padding(
                   padding: const EdgeInsets.only(bottom: 2),
                   child: Row(
                     children: [
@@ -1180,7 +1352,7 @@ class _InfoCard extends StatelessWidget {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          l['lot_no']?.toString() ?? '-',
+                          lot,
                           style: const TextStyle(fontSize: 12),
                           overflow: TextOverflow.ellipsis,
                         ),
