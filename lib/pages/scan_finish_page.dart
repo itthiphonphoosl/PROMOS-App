@@ -29,18 +29,53 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   final List<_GroupEntry> _groups = [];
   bool _finishing = false;
 
-  // ✅ base lot (lot แรกที่สร้างเอกสาร)
   String? _baseLotNo;
-
-  // ✅ current lots (leaf lots) เอาไปทำต่อได้
   List<String> _currentLots = [];
   bool _loadingLots = true;
 
-  // ✅ ให้ InfoCard โชว์ machine/station ได้แน่นอน
+  List<Map<String, dynamic>> _parkedLots = [];
+
+  // ✅ Cross-TK parked lots: lot ที่พักจาก TK อื่นแต่อยู่ที่ station เดียวกัน
+  Map<String, String> _crossTkLotMap = {}; // lot_no → source_tk_id
+  List<Map<String, dynamic>> _crossTkParkedLots = [];
+
   String? _staId;
   String? _staName;
   String? _mcId;
   String? _mcName;
+
+  // ✅ part_no default = part ล่าสุดที่ finish หรือ part ที่มากับเอกสาร
+  String? _defaultPartNo;
+
+  // ✅ เคย transfer มาแล้ว → เปิดใช้ parked lot ใน From Lot
+  bool _hasTransferHistory = false;
+
+  // ตัดเอาเฉพาะ part_no จริง — ถ้าขึ้นด้วย 6 หลักตามด้วย - = lot, return ''
+  String _extractPartNoOnly(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return '';
+    if (RegExp(r'^\d{6}-').hasMatch(s)) return '';
+    return s;
+  }
+
+  bool _isParked(dynamic v) {
+    if (v == null) return false;
+    if (v is bool) return v;
+    if (v is num) return v.toInt() == 1;
+    final s = v.toString().trim().toLowerCase();
+    return s == '1' || s == 'true';
+  }
+
+  // [FIX] เพิ่ม _toInt01 — ถูกเรียกใน _loadCurrentLotsFromSummary แต่ไม่เคย define ไว้
+  int _toInt01(dynamic v, {int fallback = 0}) {
+    if (v == null) return fallback;
+    if (v is bool) return v ? 1 : 0;
+    if (v is num) return v.toInt();
+    final s = v.toString().trim().toLowerCase();
+    if (s == 'true') return 1;
+    if (s == 'false') return 0;
+    return int.tryParse(s) ?? fallback;
+  }
 
   int _runSuffix(String lotNo) {
     final m = RegExp(r'-(\d+)$').firstMatch(lotNo.trim());
@@ -54,9 +89,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         .where((s) => s.isNotEmpty)
         .toList();
     if (all.isEmpty) return null;
-
     all.sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
-    return all.first; // ✅ base = run_no เล็กสุด (โดยรูปแบบ lot_no ของคุณ)
+    return all.first;
   }
 
   Future<void> _loadCurrentLotsFromSummary() async {
@@ -65,38 +99,31 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode == 200) {
-        // ✅ 1) base lot จาก backend (รองรับ 2 แบบ: base_lot_no หรือ base.lot_no)
+        // 1) base lot
         final baseLotNoDirect = (body['base_lot_no']?.toString() ?? '').trim();
         final baseMap = (body['base'] as Map?)?.cast<String, dynamic>();
         final baseLotNoFromObj = (baseMap?['lot_no']?.toString() ?? '').trim();
-
         final baseLot = baseLotNoDirect.isNotEmpty
             ? baseLotNoDirect
             : (baseLotNoFromObj.isNotEmpty ? baseLotNoFromObj : '');
-
-        if (baseLot.isNotEmpty) {
+        if (baseLot.isNotEmpty)
           _baseLotNo = baseLot;
-        } else {
-          // fallback: ใช้ของเดิมจาก allLots ที่ส่งเข้ามา
+        else
           _baseLotNo ??= _pickBaseLotFromAllLots();
-        }
 
-        // ✅ 2) ดึง machine/station จาก scans (ถ้ามี active scan จะมีชื่อ station/machine)
+        // 2) machine / station
         final scans = (body['scans'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-
         Map<String, dynamic>? activeScan;
         for (final s in scans.reversed) {
-          final finishTs = s['op_sc_finish_ts'];
-          if (finishTs == null || (finishTs.toString().trim().isEmpty)) {
+          final ft = s['op_sc_finish_ts'];
+          if (ft == null || ft.toString().trim().isEmpty) {
             activeScan = s;
             break;
           }
         }
-
         final current = (body['current'] as Map?)?.cast<String, dynamic>();
-
         _staId =
             (activeScan?['op_sta_id']?.toString() ??
                     current?['op_sta_id']?.toString() ??
@@ -110,46 +137,108 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 .trim();
         _mcName = (activeScan?['MC_name']?.toString() ?? '').trim();
 
-        // ✅ 3) คำนวณ leaf lots จาก transfers (lots ที่ "ทำต่อได้")
+        // 3) leaf lots (active only)
         final transfers = (body['transfers'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-
         final fromSet = <String>{};
-        final toSet = <String>{};
-
+        final activeToSet = <String>{};
         for (final t in transfers) {
-          final fromLot = (t['from_lot_no']?.toString() ?? '').trim();
-          final toLot = (t['to_lot_no']?.toString() ?? '').trim();
-          if (fromLot.isNotEmpty) fromSet.add(fromLot);
-          if (toLot.isNotEmpty) toSet.add(toLot);
+          final fl = (t['from_lot_no']?.toString() ?? '').trim();
+          final tl = (t['to_lot_no']?.toString() ?? '').trim();
+          final isParked = _toInt01(t['lot_parked_status']) == 1;
+          if (fl.isNotEmpty) fromSet.add(fl);
+          if (tl.isNotEmpty && !isParked) activeToSet.add(tl);
+        }
+        final leaf =
+            activeToSet.difference(fromSet).where((x) => x.isNotEmpty).toList()
+              ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+
+        // 4) parked lots — กรองเฉพาะ lot ที่พักใน station ของ operator ปัจจุบัน
+        final currentStaId = _staId?.trim() ?? '';
+        final parkedFromSummary = (body['parked_lots'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .where((p) {
+              final lotSta = p['op_sta_id']?.toString().trim() ?? '';
+              return currentStaId.isEmpty || lotSta == currentStaId;
+            })
+            .toList();
+
+        // ✅ Cross-TK: โหลด lot ที่พักจาก TK อื่นใน station เดียวกัน
+        final stationAllRaw = (body['parked_lots_station_all'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+
+        final crossTkMap = <String, String>{};
+        final crossTkParkedList = <Map<String, dynamic>>[];
+        for (final p in stationAllRaw) {
+          final lotNo = p['parked_lot_no']?.toString() ?? '';
+          final srcTk = p['from_tk_id']?.toString() ?? '';
+          if (lotNo.isEmpty || srcTk.isEmpty) continue;
+          if (srcTk != widget.tkId) {
+            // เป็น lot จาก TK อื่น
+            if (!crossTkMap.containsKey(lotNo)) {
+              crossTkMap[lotNo] = srcTk;
+              crossTkParkedList.add(p);
+            }
+          }
         }
 
-        // leaf = toSet - fromSet
-        final leaf =
-            toSet
-                .difference(fromSet)
-                .where((x) => x.trim().isNotEmpty)
-                .toSet()
-                .toList()
-              ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+        // 5) ✅ default part_no — เอาแค่ part_no จริงๆ ไม่เอา lot number
+        //    ลำดับ: out_part_no จาก transfer ล่าสุด → current.part_no → tkDoc.part_no
+        //    ✅ _hasTransferHistory = เคย transfer มาแล้ว (tf_rs_code != 0 / transfers ไม่ว่าง)
+        final hasTransferHistory = transfers.isNotEmpty;
+
+        String? lastPartNo;
+        if (hasTransferHistory) {
+          for (final t in transfers.reversed) {
+            final pNo = _extractPartNoOnly(t['out_part_no']?.toString() ?? '');
+            if (pNo.isNotEmpty) {
+              lastPartNo = pNo;
+              break;
+            }
+          }
+        }
+        // fallback → current.part_no (เป็น part_no จริง ไม่ใช่ lot)
+        if (lastPartNo == null || lastPartNo!.isEmpty) {
+          lastPartNo = _extractPartNoOnly(
+            current?['part_no']?.toString() ?? '',
+          );
+        }
+        // fallback → tkDoc.part_no
+        if (lastPartNo == null || lastPartNo!.isEmpty) {
+          lastPartNo = _extractPartNoOnly(
+            widget.tkDoc['part_no']?.toString() ?? '',
+          );
+        }
 
         if (!mounted) return;
         setState(() {
           _currentLots = leaf.isNotEmpty
               ? leaf
               : (_baseLotNo != null ? [_baseLotNo!] : []);
+          _parkedLots = parkedFromSummary;
+          _crossTkLotMap = crossTkMap;
+          _crossTkParkedLots = crossTkParkedList;
+          _defaultPartNo = lastPartNo;
+          _hasTransferHistory = hasTransferHistory;
           _loadingLots = false;
         });
         return;
       }
     } catch (_) {}
 
-    // fallback error case
     if (!mounted) return;
     setState(() {
       _baseLotNo ??= _pickBaseLotFromAllLots();
       _currentLots = _baseLotNo != null ? [_baseLotNo!] : [];
+      _parkedLots = [];
+      _crossTkLotMap = {};
+      _crossTkParkedLots = [];
+      _defaultPartNo = _extractPartNoOnly(
+        widget.tkDoc['part_no']?.toString() ?? '',
+      );
+      _hasTransferHistory = false;
       _loadingLots = false;
     });
   }
@@ -158,33 +247,31 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   bool _loadingParts = true;
 
   int _goodQty() => int.tryParse(_goodCtrl.text.trim()) ?? 0;
-
   int _sumGroupQty() =>
       _groups.fold(0, (a, g) => a + (int.tryParse(g.qtyCtrl.text.trim()) ?? 0));
-
   int _remainingGood() => _goodQty() - _sumGroupQty();
+  // ✅ isFirstScan = ยังไม่เคย transfer เลย → lock From Lot, ไม่ใช้ parked
+  bool get _isFirstScan => !_hasTransferHistory;
 
   @override
   void initState() {
     super.initState();
     _loadParts();
     _loadCurrentLotsFromSummary();
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       setState(() => _ensureOneGroup());
     });
   }
 
   bool get _isSimpleFlow {
-    final lots = _currentLots.where((s) => s.trim().isNotEmpty).toList();
-    if (lots.isEmpty) return true;
-    return lots.length <= 1;
+    final activeLots = _currentLots.where((s) => s.trim().isNotEmpty).toList();
+    final parkedCount = _parkedLots.length + _crossTkParkedLots.length;
+    // simple flow = มี lot ที่ใช้ได้รวมกันทั้งหมดไม่เกิน 1
+    return (activeLots.length + parkedCount) <= 1;
   }
 
   void _ensureOneGroup() {
-    if (_groups.isEmpty) {
-      _groups.add(_GroupEntry());
-    }
+    if (_groups.isEmpty) _groups.add(_GroupEntry());
   }
 
   Future<void> _loadParts() async {
@@ -211,10 +298,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
   void _addGroup() {
     final remaining = _remainingGood();
-    if (remaining <= 0) return;
-
-    final entry = _GroupEntry();
-    entry.qtyCtrl.text = remaining.toString();
+    // [FIX] ไม่ block — เพิ่ม group ได้เสมอถ้ามี lot มากกว่า 1
+    // ถ้า remaining > 0 → pre-fill qty ให้, ถ้าไม่มี → ปล่อยว่างให้กรอกเอง
+    final entry = _GroupEntry()
+      ..qtyCtrl.text = remaining > 0 ? remaining.toString() : '';
+    entry.defaultPartNo = _defaultPartNo;
     setState(() => _groups.add(entry));
   }
 
@@ -227,24 +315,22 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     if (goodRaw == null || scrapRaw == null) {
       CoolerAlert.show(
         context,
-        message: 'กรุณากรอก Good Qty และ Scrap Qty เป็นตัวเลข',
+        message: 'กรุณากรอก จำนวน OK และ จำนวน NG เป็นตัวเลข',
         type: CoolerAlertType.warning,
       );
       return;
     }
-
     final good = goodRaw.abs();
     final scrap = scrapRaw.abs();
 
     if (good == 0 && scrap == 0) {
       CoolerAlert.show(
         context,
-        message: 'Good และ Scrap ห้ามเป็น 0 พร้อมกัน',
+        message: 'จำนวน OK และ NG ห้ามเป็น 0 พร้อมกัน',
         type: CoolerAlertType.warning,
       );
       return;
     }
-
     if (_groups.isEmpty) {
       CoolerAlert.show(
         context,
@@ -258,11 +344,22 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       0,
       (a, g) => a + ((int.tryParse(g.qtyCtrl.text.trim()) ?? 0).abs()),
     );
-    if (sumGroupQty != good) {
+    final hasSplitGroup = _groups.any((g) => g.tfRsCode == 2);
+
+    if (!hasSplitGroup && sumGroupQty != good) {
       CoolerAlert.show(
         context,
         message:
-            'รวม qty ทุก Group ($sumGroupQty) ≠ good_qty ($good)\nกรุณาตรวจสอบ',
+            'รวม qty ทุก Group ($sumGroupQty) ต้องเท่ากับ จำนวน OK ($good) พอดี',
+        type: CoolerAlertType.warning,
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+    if (hasSplitGroup && sumGroupQty > good) {
+      CoolerAlert.show(
+        context,
+        message: 'รวม qty ทุก Group ($sumGroupQty) เกิน จำนวน OK ($good)',
         type: CoolerAlertType.warning,
         duration: const Duration(seconds: 4),
       );
@@ -280,7 +377,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         return;
       }
     }
-
     setState(() => _finishing = true);
     try {
       final res = await ApiService.finishScan(
@@ -292,15 +388,53 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode == 200) {
+        final isFinished = body['is_finished'] == true;
+        final autoParkedCount = (body['auto_parked_count'] ?? 0) as int;
+        final createdGroups = (body['created_groups'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .where((g) => g['group'].toString() != 'auto_park')
+            .toList();
+
+        String tfLabel(dynamic tf) {
+          switch (int.tryParse(tf?.toString() ?? '') ?? 0) {
+            case 1:
+              return 'Master-ID';
+            case 2:
+              return 'Split-ID';
+            case 3:
+              return 'Co-ID';
+            default:
+              return '-';
+          }
+        }
+
+        final groupLines = createdGroups
+            .asMap()
+            .entries
+            .map((e) {
+              final idx = e.key + 1;
+              final g = e.value;
+              final lbl = tfLabel(g['tf_rs_code']);
+              final pLots = (g['parked_lots'] as List? ?? []);
+              final pNote = pLots.isNotEmpty ? '  🔵 พัก ${pLots.length}' : '';
+              return 'Group $idx : $lbl$pNote';
+            })
+            .join('\n');
+
+        final msgLines = [
+          groupLines,
+          if (autoParkedCount > 0)
+            '🔵 Auto-พัก $autoParkedCount lot (ไม่ได้ใช้งาน)',
+          if (isFinished) '✅ ปิดเอกสารแล้ว',
+        ].join('\n');
+
         CoolerAlert.show(
           context,
           title: 'Finish สำเร็จ!',
-          message:
-              'tk_status: ${body['tk_status']} | groups: ${body['created_groups_count']}',
+          message: msgLines,
           type: CoolerAlertType.success,
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 4),
         );
-
         await Future.delayed(const Duration(seconds: 2));
         if (!mounted) return;
         Navigator.pushAndRemoveUntil(
@@ -332,9 +466,26 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
   @override
   Widget build(BuildContext context) {
-    final lots = _currentLots; // leaf lots
-
-    final canAddGroup = !_isSimpleFlow && _remainingGood() > 0;
+    final lots = _currentLots;
+    // [FIX] ให้เพิ่ม Group ได้เลยถ้ามี lot มากกว่า 1
+    // ไม่ต้องรอกรอก good_qty ก่อน — validate ที่ปุ่ม Finish แทน
+    final canAddGroup = !_isSimpleFlow;
+    final isQtyFull = _goodQty() > 0 && _remainingGood() <= 0;
+    final parkedLotNos = _parkedLots
+        .map((pl) => pl['parked_lot_no']?.toString() ?? '')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    // ✅ cross-TK lot nos (จาก TK อื่นที่พักอยู่ใน station เดียวกัน)
+    final crossTkLotNos = _crossTkParkedLots
+        .map((pl) => pl['parked_lot_no']?.toString() ?? '')
+        .where((s) => s.isNotEmpty)
+        .toList();
+    // ✅ รวม lots ทั้งหมด: active + own-parked + cross-TK parked
+    //    cross-TK lots ให้เลือกได้เสมอ (ไม่ขึ้นกับ _hasTransferHistory)
+    final allAvailableLots = [
+      ...(_hasTransferHistory ? [...lots, ...parkedLotNos] : lots),
+      ...crossTkLotNos,
+    ];
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
@@ -348,6 +499,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ── Info Card ──
             _InfoCard(
               tkId: widget.tkId,
               tkDoc: widget.tkDoc,
@@ -360,6 +512,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             ),
             const SizedBox(height: 16),
 
+            // ── จำนวน OK / NG ──
             Card(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -383,7 +536,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                           child: TextField(
                             controller: _goodCtrl,
                             decoration: const InputDecoration(
-                              labelText: 'Good Qty ✅',
+                              labelText: 'จำนวน OK ✅',
                               border: OutlineInputBorder(),
                             ),
                             keyboardType: TextInputType.number,
@@ -404,7 +557,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                           child: TextField(
                             controller: _scrapCtrl,
                             decoration: const InputDecoration(
-                              labelText: 'Scrap Qty ❌',
+                              labelText: 'จำนวน NG ❌',
                               border: OutlineInputBorder(),
                             ),
                             keyboardType: TextInputType.number,
@@ -413,7 +566,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                         ),
                       ],
                     ),
-
+                    // indicator
                     Builder(
                       builder: (ctx) {
                         final g = (int.tryParse(_goodCtrl.text.trim()) ?? 0)
@@ -421,21 +574,22 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                         final s = (int.tryParse(_scrapCtrl.text.trim()) ?? 0)
                             .abs();
                         final total = g + s;
-
-                        final sumGroups = _groups.fold(
+                        final sumGrp = _groups.fold(
                           0,
                           (a, x) =>
                               a +
                               ((int.tryParse(x.qtyCtrl.text.trim()) ?? 0)
                                   .abs()),
                         );
+                        final remain = g - sumGrp;
 
-                        final remaining = g - sumGroups;
-
-                        if (total <= 0 && sumGroups <= 0)
+                        if (total <= 0 && sumGrp <= 0)
                           return const SizedBox.shrink();
 
-                        final warn = remaining != 0;
+                        final isOver = remain < 0;
+                        final hasSplit = _groups.any((g) => g.tfRsCode == 2);
+                        final isParked = remain > 0 && hasSplit;
+                        final isShort = remain > 0 && !hasSplit;
 
                         return Padding(
                           padding: const EdgeInsets.only(top: 10),
@@ -445,13 +599,21 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                               vertical: 10,
                             ),
                             decoration: BoxDecoration(
-                              color: warn
+                              color: isOver
+                                  ? Colors.red.shade50
+                                  : isShort
                                   ? Colors.orange.shade50
+                                  : isParked
+                                  ? Colors.blue.shade50
                                   : Colors.green.shade50,
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
-                                color: warn
+                                color: isOver
+                                    ? Colors.red.shade200
+                                    : isShort
                                     ? Colors.orange.shade200
+                                    : isParked
+                                    ? Colors.blue.shade200
                                     : Colors.green.shade200,
                               ),
                             ),
@@ -459,22 +621,34 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Total qty (good+scrap) = $total',
+                                  'Total qty (OK + NG) = $total',
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  'Sum Group qty = $sumGroups  (ต้องเท่ากับ Good Qty = $g)',
+                                  hasSplit
+                                      ? 'Sum Group qty = $sumGrp  (ต้องไม่เกิน จำนวน OK = $g)'
+                                      : 'Sum Group qty = $sumGrp  (ต้องเท่ากับ จำนวน OK = $g)',
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  'Remaining (Good - SumGroups) = $remaining',
+                                  isOver
+                                      ? '⚠️ เกิน จำนวน OK ${remain.abs()} ชิ้น'
+                                      : isShort
+                                      ? '⚠️ ยังขาดอีก $remain ชิ้น (ต้องครบ $g)'
+                                      : isParked
+                                      ? '🔵 จะพักอัตโนมัติ $remain ชิ้น'
+                                      : '✅ ครบพอดี',
                                   style: TextStyle(
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
-                                    color: warn
+                                    color: isOver
+                                        ? Colors.red.shade800
+                                        : isShort
                                         ? Colors.orange.shade800
+                                        : isParked
+                                        ? Colors.blue.shade800
                                         : Colors.green.shade800,
                                   ),
                                 ),
@@ -490,6 +664,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             ),
             const SizedBox(height: 16),
 
+            // ── Loading indicators ──
             if (_loadingLots)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
@@ -508,7 +683,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                   ],
                 ),
               ),
-
             if (_loadingParts)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
@@ -528,23 +702,153 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 ),
               ),
 
-            ...List.generate(
-              _groups.length,
-              (i) => _GroupCard(
+            // ── ✅ Parked Lots inline section (own-TK + cross-TK) ──
+            if (_parkedLots.isNotEmpty || _crossTkParkedLots.isNotEmpty) ...[
+              Card(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                color: Colors.blue.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(
+                            Icons.inventory_2_outlined,
+                            color: Colors.blue,
+                            size: 18,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Lot ที่พักไว้ใน Station นี้',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.blue,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      // own-TK parked lots
+                      ..._parkedLots.map(
+                        (pl) => _ParkedLotTile(
+                          lotNo: pl['parked_lot_no']?.toString() ?? '',
+                          qty: pl['parked_qty']?.toString() ?? '-',
+                          reason: pl['parked_reason']?.toString() ?? '',
+                          tkId: pl['from_tk_id']?.toString() ?? '-',
+                          sta: pl['op_sta_id']?.toString() ?? '-',
+                          staName: pl['op_sta_name']?.toString() ?? '',
+                          isCrossTk: false,
+                        ),
+                      ),
+                      // cross-TK parked lots
+                      if (_crossTkParkedLots.isNotEmpty) ...[
+                        const Divider(height: 12),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.swap_horiz,
+                              color: Colors.orange.shade700,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Lot จาก TK อื่น (สามารถหยิบมาใช้ได้)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.orange.shade700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        ..._crossTkParkedLots.map(
+                          (pl) => _ParkedLotTile(
+                            lotNo: pl['parked_lot_no']?.toString() ?? '',
+                            qty: pl['parked_qty']?.toString() ?? '-',
+                            reason: pl['parked_reason']?.toString() ?? '',
+                            tkId: pl['from_tk_id']?.toString() ?? '-',
+                            sta: pl['op_sta_id']?.toString() ?? '-',
+                            staName: pl['op_sta_name']?.toString() ?? '',
+                            isCrossTk: true,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 4),
+                      const Text(
+                        '💡 Lot ที่พักไว้สามารถเลือกใน From Lot ได้',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // ── Group Cards ──
+            ...List.generate(_groups.length, (i) {
+              if (_groups[i].defaultPartNo == null && _defaultPartNo != null) {
+                final v = _defaultPartNo!;
+                _groups[i].defaultPartNo = RegExp(r'^\d{6}-').hasMatch(v)
+                    ? null
+                    : v;
+              }
+
+              // ✅ รวม lot ที่ถูกใช้ใน group อื่นแล้ว (tf=1/2 ใช้ fromLotNo, tf=3 ใช้ mergeLots)
+              final usedLots = <String>{};
+              for (final e in _groups.asMap().entries) {
+                if (e.key == i) continue;
+                final g = e.value;
+                // tf=1 / tf=2: fromLotNo
+                if (g.fromLotNo != null && g.fromLotNo!.isNotEmpty) {
+                  usedLots.add(g.fromLotNo!);
+                }
+                // tf=3: merge lots ทุกตัว
+                for (final m in g.mergeLots) {
+                  if (m.fromLotNo != null && m.fromLotNo!.isNotEmpty) {
+                    usedLots.add(m.fromLotNo!);
+                  }
+                }
+              }
+              // ✅ กรอง lot ที่ group ปัจจุบันเลือกไปแล้วใน merge rows อื่น (tf=3 ภายใน group เดียวกัน)
+              final selfUsedMergeLots = <String>{};
+              if (_groups[i].tfRsCode == 3) {
+                for (final m in _groups[i].mergeLots) {
+                  if (m.fromLotNo != null && m.fromLotNo!.isNotEmpty) {
+                    selfUsedMergeLots.add(m.fromLotNo!);
+                  }
+                }
+              }
+
+              final lotsForThisGroup = allAvailableLots
+                  .where((l) => !usedLots.contains(l))
+                  .toList();
+
+              return _GroupCard(
+                key: ValueKey(i),
                 index: i,
                 entry: _groups[i],
-                availableLots: lots,
+                availableLots: lotsForThisGroup,
+                selfUsedMergeLots:
+                    selfUsedMergeLots, // ✅ กัน merge rows ซ้ำกันเอง
                 availableParts: _parts,
+                isFirstScan: _isFirstScan,
+                crossTkLotMap: _crossTkLotMap,
                 onChanged: () => setState(() {}),
                 onRemove: () => _removeGroup(i),
-              ),
-            ),
+              );
+            }),
 
             OutlinedButton.icon(
               onPressed: canAddGroup ? _addGroup : null,
               icon: const Icon(Icons.add),
               label: Text(
-                canAddGroup ? 'เพิ่ม Group' : 'เพิ่ม Group (ครบแล้ว)',
+                isQtyFull ? 'เพิ่ม Group (qty ครบแล้ว)' : 'เพิ่ม Group',
               ),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: Colors.orange),
@@ -566,8 +870,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 onPressed: _finishing ? null : _finish,
                 icon: _finishing
                     ? const SizedBox(
-                        height: 20,
                         width: 20,
+                        height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2.5,
                           color: Colors.white,
@@ -588,6 +892,88 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 }
 
 // ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// ✅ _ParkedLotTile — ใช้ใน ScanFinishPage (own-TK + cross-TK)
+// ══════════════════════════════════════════════════════════════════
+
+class _ParkedLotTile extends StatelessWidget {
+  final String lotNo;
+  final String qty;
+  final String reason;
+  final String tkId;
+  final String sta;
+  final String staName;
+  final bool isCrossTk;
+
+  const _ParkedLotTile({
+    required this.lotNo,
+    required this.qty,
+    required this.reason,
+    required this.tkId,
+    required this.sta,
+    required this.staName,
+    required this.isCrossTk,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = isCrossTk
+        ? Colors.orange.shade200
+        : Colors.blue.shade200;
+    final iconColor = isCrossTk ? Colors.orange.shade700 : Colors.blue;
+    final icon = isCrossTk ? Icons.swap_horiz : Icons.pause_circle_outline;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: iconColor, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  lotNo,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  'TK: $tkId  •  Station: ${staName.isNotEmpty ? "$sta ($staName)" : sta}',
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+                Text(
+                  'Qty: $qty  •  $reason',
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+                if (isCrossTk)
+                  Text(
+                    '🔀 เลือกใน From Lot เพื่อดึงมาใช้กับ TK นี้',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.orange.shade700,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 // Models
 // ══════════════════════════════════════════════════════════════════
 
@@ -595,25 +981,24 @@ class _GroupEntry {
   int tfRsCode = 1;
   final qtyCtrl = TextEditingController();
 
-  String? fromLotNo; // tf=1 & tf=2 shared
-  String? outPartNo; // tf=1
+  String? fromLotNo;
+  String? outPartNo; // tf=1: out_part_no (group level)
+  String?
+  outPartNoGroup; // tf=2: out_part_no (group level, สำหรับ parked remainder)
+  String? defaultPartNo;
 
-  final List<_SplitEntry> splits = [_SplitEntry(), _SplitEntry()]; // tf=2
+  final List<_SplitEntry> splits = [];
 
-  String? outPartNoMerge; // tf=3
+  String? outPartNoMerge;
   final List<_MergeLotEntry> mergeLots = [_MergeLotEntry(), _MergeLotEntry()];
 
   String? validate() {
     final qty = int.tryParse(qtyCtrl.text.trim());
     if (qty == null || qty <= 0) return 'qty ต้องมากกว่า 0';
 
-    if (tfRsCode == 1) {
-      if (outPartNo == null || outPartNo!.isEmpty)
-        return 'กรุณาเลือก Out Part No';
-    }
+    // tf=1 / tf=2: out_part_no ใช้ defaultPartNo อัตโนมัติ → ไม่ต้อง validate ที่นี่
 
     if (tfRsCode == 2) {
-      if (splits.length < 2) return 'ต้องมีอย่างน้อย 2 splits';
       for (final s in splits) {
         if (s.partNo == null || s.partNo!.isEmpty)
           return 'เลือก Part No ใน split ให้ครบ';
@@ -625,7 +1010,7 @@ class _GroupEntry {
         0,
         (a, s) => a + (int.tryParse(s.qtyCtrl.text.trim()) ?? 0),
       );
-      if (sumSplit != qty) return 'sum splits ($sumSplit) ≠ group qty ($qty)';
+      if (sumSplit > qty) return 'sum splits ($sumSplit) เกิน group qty ($qty)';
     }
 
     if (tfRsCode == 3) {
@@ -653,19 +1038,20 @@ class _GroupEntry {
     final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
 
     if (tfRsCode == 1) {
+      // [FIX] API ต้องการ out_part_no สำหรับ tf=1
       return {
         'tf_rs_code': 1,
         'qty': qty,
-        'out_part_no': outPartNo ?? '',
+        'out_part_no': outPartNo ?? defaultPartNo ?? '',
         if (fromLotNo != null && fromLotNo!.isNotEmpty)
           'from_lot_no': fromLotNo,
       };
     }
-
     if (tfRsCode == 2) {
       return {
         'tf_rs_code': 2,
-        'qty': qty,
+        'qty': qty, // ← เพิ่มบรรทัดนี้
+        'out_part_no': outPartNoGroup ?? defaultPartNo ?? '',
         if (fromLotNo != null && fromLotNo!.isNotEmpty)
           'from_lot_no': fromLotNo,
         'splits': splits
@@ -678,10 +1064,9 @@ class _GroupEntry {
             .toList(),
       };
     }
-
+    // tf=3: qty auto-sum ที่ server จาก merge_lots
     return {
       'tf_rs_code': 3,
-      'qty': qty,
       'out_part_no': outPartNoMerge ?? '',
       'merge_lots': mergeLots
           .map(
@@ -706,22 +1091,30 @@ class _MergeLotEntry {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Group UI
+// Group Card
 // ══════════════════════════════════════════════════════════════════
 
 class _GroupCard extends StatefulWidget {
   final int index;
   final _GroupEntry entry;
   final List<String> availableLots;
+  final Set<String>
+  selfUsedMergeLots; // ✅ lots ที่ merge rows อื่นใน group นี้เลือกไปแล้ว
   final List<Map<String, dynamic>> availableParts;
+  final bool isFirstScan;
+  final Map<String, String> crossTkLotMap;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
 
   const _GroupCard({
+    super.key,
     required this.index,
     required this.entry,
     required this.availableLots,
+    required this.selfUsedMergeLots,
     required this.availableParts,
+    required this.isFirstScan,
+    required this.crossTkLotMap,
     required this.onChanged,
     required this.onRemove,
   });
@@ -734,6 +1127,50 @@ class _GroupCardState extends State<_GroupCard> {
   _GroupEntry get g => widget.entry;
 
   bool get _canCoId => widget.availableLots.length >= 2;
+
+  // ✅ Helper: สร้าง DropdownMenuItem<String> พร้อม cross-TK label — ไม่ overflow
+  static DropdownMenuItem<String> _buildLotDropdownItem(
+    String lotNo,
+    String? sourceTk,
+  ) {
+    final isCross = sourceTk != null;
+    return DropdownMenuItem<String>(
+      value: lotNo,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (isCross)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.swap_horiz, size: 11, color: Colors.orange.shade700),
+                const SizedBox(width: 3),
+                Text(
+                  'Lot พัก จาก $sourceTk',
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Colors.orange.shade700,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                ),
+              ],
+            ),
+          Text(
+            lotNo,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              color: isCross ? Colors.orange.shade800 : null,
+              height: 1.3,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   bool get _singleLot => widget.availableLots.length == 1;
 
   final _tfLabels = {1: '1 - Master ID', 2: '2 - Split ID', 3: '3 - Co-ID'};
@@ -746,71 +1183,33 @@ class _GroupCardState extends State<_GroupCard> {
   }
 
   void _autoLockFromLot() {
+    // ✅ ล็อค From Lot อัตโนมัติเฉพาะตอน isFirstScan (ยังไม่เคย transfer)
+    //    และมี lot เดียวเท่านั้น — ถ้าผ่านมาแล้วหรือมี parked lots ให้เลือกเองได้
     if ((g.tfRsCode == 1 || g.tfRsCode == 2) &&
-        _singleLot &&
+        widget.isFirstScan &&
+        widget.availableLots.length == 1 &&
         g.fromLotNo == null &&
         widget.availableLots.isNotEmpty) {
       g.fromLotNo = widget.availableLots.first;
     }
   }
 
-  Widget _partDropdown({
+  // ✅ Searchable part dropdown ด้วย showSearch
+  void _showPartSearch({
     required String label,
-    required String? value,
-    required ValueChanged<String?> onChanged,
+    required String? currentValue,
+    required ValueChanged<String?> onPicked,
   }) {
-    final parts = widget.availableParts;
-
-    return DropdownButtonFormField<String>(
-      value: value,
-      isExpanded: true,
-      menuMaxHeight: 320,
-      decoration: InputDecoration(
-        labelText: label,
-        border: const OutlineInputBorder(),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 14,
-        ),
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _PartSearchSheet(
+        label: label,
+        parts: widget.availableParts,
+        currentValue: currentValue,
+        onPicked: onPicked,
       ),
-      hint: const Text('เลือก Part No'),
-      selectedItemBuilder: (context) {
-        return parts.map((p) {
-          final pNo = p['part_no']?.toString() ?? '';
-          final pName = p['part_name']?.toString() ?? '';
-          final text = pName.isEmpty ? pNo : '$pNo • $pName';
-          return Align(
-            alignment: Alignment.centerLeft,
-            child: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
-          );
-        }).toList();
-      },
-      items: parts.map((p) {
-        final pNo = p['part_no']?.toString() ?? '';
-        final pName = p['part_name']?.toString() ?? '';
-        return DropdownMenuItem<String>(
-          value: pNo,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                pNo,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
-              ),
-              if (pName.isNotEmpty)
-                Text(
-                  pName,
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
-                ),
-            ],
-          ),
-        );
-      }).toList(),
-      onChanged: onChanged,
     );
   }
 
@@ -843,6 +1242,7 @@ class _GroupCardState extends State<_GroupCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // header
             Row(
               children: [
                 Container(
@@ -871,6 +1271,7 @@ class _GroupCardState extends State<_GroupCard> {
             ),
             const SizedBox(height: 12),
 
+            // Transfer Type
             DropdownButtonFormField<int>(
               value: g.tfRsCode,
               decoration: const InputDecoration(
@@ -900,21 +1301,24 @@ class _GroupCardState extends State<_GroupCard> {
             ),
             const SizedBox(height: 12),
 
+            // Qty
             TextField(
               controller: g.qtyCtrl,
               decoration: const InputDecoration(
                 labelText: 'Qty ของ Group นี้',
                 border: OutlineInputBorder(),
-                helperText: 'รวมทุก Group ต้องเท่ากับ Good Qty (ไม่นับ scrap)',
+                helperText: 'รวมทุก Group ต้องไม่เกิน จำนวน OK',
               ),
               keyboardType: TextInputType.number,
               onChanged: (_) => widget.onChanged(),
             ),
             const SizedBox(height: 12),
 
+            // From Lot (tf=1 / tf=2)
             if ((g.tfRsCode == 1 || g.tfRsCode == 2) &&
                 widget.availableLots.isNotEmpty) ...[
-              if (_singleLot)
+              // ✅ lock ก็ต่อเมื่อ first scan (ยังไม่เคย transfer) และ lot เดียว
+              if (widget.isFirstScan && widget.availableLots.length == 1)
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
@@ -964,14 +1368,38 @@ class _GroupCardState extends State<_GroupCard> {
                   decoration: const InputDecoration(
                     labelText: 'From Lot',
                     border: OutlineInputBorder(),
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
                   ),
                   isExpanded: true,
+                  // ✅ selected display = 1 บรรทัดเสมอ → กัน overflow
+                  selectedItemBuilder: (context) =>
+                      widget.availableLots.map((l) {
+                        final isCross = widget.crossTkLotMap.containsKey(l);
+                        return Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            l,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isCross ? Colors.orange.shade800 : null,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                  itemHeight:
+                      widget.crossTkLotMap.keys.any(
+                        (k) => widget.availableLots.contains(k),
+                      )
+                      ? 56.0
+                      : 48.0,
                   items: widget.availableLots
                       .map(
-                        (l) => DropdownMenuItem(
-                          value: l,
-                          child: Text(l, overflow: TextOverflow.ellipsis),
-                        ),
+                        (l) =>
+                            _buildLotDropdownItem(l, widget.crossTkLotMap[l]),
                       )
                       .toList(),
                   onChanged: (v) => setState(() {
@@ -982,20 +1410,18 @@ class _GroupCardState extends State<_GroupCard> {
               const SizedBox(height: 12),
             ],
 
-            if (g.tfRsCode == 1)
-              _partDropdown(
-                label: 'Out Part No',
-                value: g.outPartNo,
-                onChanged: (v) => setState(() {
-                  g.outPartNo = v;
-                  widget.onChanged();
-                }),
-              ),
-
+            // [FIX UX] tf=1 / tf=2 ไม่ต้องโชว์ Out Part No ซ้ำ
+            // → ใช้ defaultPartNo อัตโนมัติ (ส่งใน toJson() อยู่แล้ว)
+            // → ถ้า operator ต้องการเปลี่ยน part ค่อยเพิ่มปุ่มภายหลัง
             if (g.tfRsCode == 2) ...[
               const Text(
                 'Splits:',
                 style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'ถ้าไม่เพิ่ม Split = qty ทั้งหมดจะพักอัตโนมัติ',
+                style: TextStyle(fontSize: 11, color: Colors.grey),
               ),
               const SizedBox(height: 8),
               ...List.generate(
@@ -1004,18 +1430,28 @@ class _GroupCardState extends State<_GroupCard> {
                   index: i,
                   entry: g.splits[i],
                   availableParts: widget.availableParts,
+                  defaultPartNo: g.defaultPartNo, // ✅ ส่ง default ลงไป
                   onChanged: widget.onChanged,
-                  onRemove: g.splits.length > 2
+                  onRemove: g.splits.length > 1
                       ? () => setState(() {
                           g.splits.removeAt(i);
                           widget.onChanged();
                         })
                       : null,
+                  onTapPartSearch: () => _showPartSearch(
+                    label: 'Part No (Split ${i + 1})',
+                    currentValue: g.splits[i].partNo,
+                    onPicked: (v) {
+                      setState(() => g.splits[i].partNo = v);
+                      widget.onChanged();
+                    },
+                  ),
                 ),
               ),
               TextButton.icon(
                 onPressed: () => setState(() {
-                  g.splits.add(_SplitEntry());
+                  // ✅ split ใหม่ใช้ default part เดิม
+                  g.splits.add(_SplitEntry()..partNo = g.defaultPartNo);
                   widget.onChanged();
                 }),
                 icon: const Icon(Icons.add, size: 18),
@@ -1023,11 +1459,15 @@ class _GroupCardState extends State<_GroupCard> {
               ),
             ],
 
+            // tf=3: CO-ID
             if (g.tfRsCode == 3) ...[
-              _partDropdown(
+              // ✅ out_part_no searchable
+              _PartPickerField(
                 label: 'Out Part No (ผลลัพธ์รวม)',
                 value: g.outPartNoMerge,
-                onChanged: (v) => setState(() {
+                defaultValue: g.defaultPartNo,
+                parts: widget.availableParts,
+                onPicked: (v) => setState(() {
                   g.outPartNoMerge = v;
                   widget.onChanged();
                 }),
@@ -1038,12 +1478,30 @@ class _GroupCardState extends State<_GroupCard> {
                 style: TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
-              ...List.generate(
-                g.mergeLots.length,
-                (i) => _MergeLotRow(
+              ...List.generate(g.mergeLots.length, (i) {
+                // ✅ กัน lot ซ้ำภายใน merge rows: ซ่อน lot ที่ row อื่นเลือกไปแล้ว
+                final otherMergePicked = g.mergeLots
+                    .asMap()
+                    .entries
+                    .where(
+                      (e) =>
+                          e.key != i &&
+                          e.value.fromLotNo != null &&
+                          e.value.fromLotNo!.isNotEmpty,
+                    )
+                    .map((e) => e.value.fromLotNo!)
+                    .toSet();
+                // รวมกับ lots ที่ group อื่น (cross-group) ใช้แล้ว — ได้มาจาก parent ผ่าน selfUsedMergeLots
+                // (selfUsedMergeLots ณ ตอน build อาจ stale เล็กน้อย แต่ cross-group dedup จัดการจาก availableLots แล้ว)
+                final lotsForRow = widget.availableLots
+                    .where((l) => !otherMergePicked.contains(l))
+                    .toList();
+
+                return _MergeLotRow(
                   index: i,
                   entry: g.mergeLots[i],
-                  availableLots: widget.availableLots,
+                  availableLots: lotsForRow,
+                  crossTkLotMap: widget.crossTkLotMap,
                   onChanged: widget.onChanged,
                   onRemove: g.mergeLots.length > 2
                       ? () => setState(() {
@@ -1051,8 +1509,8 @@ class _GroupCardState extends State<_GroupCard> {
                           widget.onChanged();
                         })
                       : null,
-                ),
-              ),
+                );
+              }),
               TextButton.icon(
                 onPressed: () => setState(() {
                   g.mergeLots.add(_MergeLotEntry());
@@ -1069,116 +1527,345 @@ class _GroupCardState extends State<_GroupCard> {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════
+// ✅ Part Picker Field (tap → bottom sheet search)
+// ══════════════════════════════════════════════════════════════════
+
+class _PartPickerField extends StatelessWidget {
+  final String label;
+  final String? value;
+  final String? defaultValue;
+  final List<Map<String, dynamic>> parts;
+  final ValueChanged<String?> onPicked;
+
+  const _PartPickerField({
+    required this.label,
+    required this.value,
+    required this.defaultValue,
+    required this.parts,
+    required this.onPicked,
+  });
+
+  // ✅ โชว์แค่ part_no สั้นๆ ไม่เอา lot number ปน
+  String _displayText() {
+    final v = value ?? defaultValue ?? '';
+    if (v.isEmpty) return 'เลือก Part No';
+    // ถ้าค่าเป็น lot_no (ขึ้น 6 หลัก) ให้โชว์ placeholder
+    if (RegExp(r'^\d{6}-').hasMatch(v)) return 'เลือก Part No';
+    final part = parts.firstWhere(
+      (p) => p['part_no']?.toString() == v,
+      orElse: () => {},
+    );
+    final pName = part['part_name']?.toString() ?? '';
+    // โชว์: "322-K26 • Caliper RR K26"  ไม่เอา lot number
+    return pName.isNotEmpty ? '$v  •  $pName' : v;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final effective = value ?? defaultValue;
+    return InkWell(
+      onTap: () => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _PartSearchSheet(
+          label: label,
+          parts: parts,
+          currentValue: effective,
+          onPicked: onPicked,
+        ),
+      ),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          suffixIcon: const Icon(Icons.search),
+        ),
+        child: Text(
+          _displayText(),
+          style: TextStyle(
+            fontSize: 14,
+            color: effective != null ? Colors.black87 : Colors.grey,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ✅ Part Search Bottom Sheet
+// ══════════════════════════════════════════════════════════════════
+
+class _PartSearchSheet extends StatefulWidget {
+  final String label;
+  final List<Map<String, dynamic>> parts;
+  final String? currentValue;
+  final ValueChanged<String?> onPicked;
+
+  const _PartSearchSheet({
+    required this.label,
+    required this.parts,
+    required this.currentValue,
+    required this.onPicked,
+  });
+
+  @override
+  State<_PartSearchSheet> createState() => _PartSearchSheetState();
+}
+
+class _PartSearchSheetState extends State<_PartSearchSheet> {
+  final _searchCtrl = TextEditingController();
+  List<Map<String, dynamic>> _filtered = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _filtered = widget.parts;
+    _searchCtrl.addListener(_onSearch);
+  }
+
+  void _onSearch() {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    setState(() {
+      _filtered = q.isEmpty
+          ? widget.parts
+          : widget.parts.where((p) {
+              final pNo = (p['part_no']?.toString() ?? '').toLowerCase();
+              final pName = (p['part_name']?.toString() ?? '').toLowerCase();
+              return pNo.contains(q) || pName.contains(q);
+            }).toList();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.75,
+      minChildSize: 0.4,
+      maxChildSize: 0.95,
+      builder: (ctx, ctrl) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // handle
+            Container(
+              margin: const EdgeInsets.only(top: 8, bottom: 4),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                widget.label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'ค้นหา Part No / Part Name...',
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  isDense: true,
+                ),
+              ),
+            ),
+            Expanded(
+              child: _filtered.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'ไม่พบ Part',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    )
+                  : ListView.separated(
+                      controller: ctrl,
+                      itemCount: _filtered.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final p = _filtered[i];
+                        final pNo = p['part_no']?.toString() ?? '';
+                        final pName = p['part_name']?.toString() ?? '';
+                        final selected = pNo == widget.currentValue;
+                        return ListTile(
+                          selected: selected,
+                          selectedColor: Colors.orange,
+                          selectedTileColor: Colors.orange.shade50,
+                          leading: selected
+                              ? const Icon(
+                                  Icons.check_circle,
+                                  color: Colors.orange,
+                                )
+                              : const Icon(
+                                  Icons.radio_button_unchecked,
+                                  color: Colors.grey,
+                                ),
+                          title: Text(
+                            pNo,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                          subtitle: pName.isNotEmpty
+                              ? Text(
+                                  pName,
+                                  style: const TextStyle(fontSize: 11),
+                                )
+                              : null,
+                          onTap: () {
+                            widget.onPicked(pNo);
+                            Navigator.pop(context);
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Split Row (พร้อม search + default part)
+// ══════════════════════════════════════════════════════════════════
+
 class _SplitRow extends StatelessWidget {
   final int index;
   final _SplitEntry entry;
   final List<Map<String, dynamic>> availableParts;
+  final String? defaultPartNo;
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
+  final VoidCallback onTapPartSearch;
 
   const _SplitRow({
     required this.index,
     required this.entry,
     required this.availableParts,
+    required this.defaultPartNo,
     required this.onChanged,
+    required this.onTapPartSearch,
     this.onRemove,
   });
 
+  // ✅ โชว์แค่ part_no จริง ไม่เอา lot number
+  String _partDisplay() {
+    final v = entry.partNo ?? defaultPartNo ?? '';
+    if (v.isEmpty) return 'เลือก Part No';
+    if (RegExp(r'^\d{6}-').hasMatch(v)) return 'เลือก Part No';
+    final part = availableParts.firstWhere(
+      (p) => p['part_no']?.toString() == v,
+      orElse: () => {},
+    );
+    final pName = part['part_name']?.toString() ?? '';
+    return pName.isNotEmpty ? '$v  •  $pName' : v;
+  }
+
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Row(
-      children: [
-        SizedBox(
-          width: 28,
-          child: Text(
-            '${index + 1}.',
-            style: const TextStyle(
-              fontWeight: FontWeight.bold,
-              color: Colors.grey,
+  Widget build(BuildContext context) {
+    final effective = entry.partNo ?? defaultPartNo;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 28,
+            child: Text(
+              '${index + 1}.',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.grey,
+              ),
             ),
           ),
-        ),
-        Expanded(
-          flex: 3,
-          child: DropdownButtonFormField<String>(
-            value: entry.partNo,
-            decoration: const InputDecoration(
-              labelText: 'Part No',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-            hint: const Text('เลือก', style: TextStyle(fontSize: 12)),
-            isExpanded: true,
-            menuMaxHeight: 280,
-            items: availableParts.map((p) {
-              final pNo = p['part_no']?.toString() ?? '';
-              final pName = p['part_name']?.toString() ?? '';
-              return DropdownMenuItem<String>(
-                value: pNo,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      pNo,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (pName.isNotEmpty)
-                      Text(
-                        pName,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: Colors.grey,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                  ],
+          // ✅ tap → search sheet
+          Expanded(
+            flex: 3,
+            child: InkWell(
+              onTap: onTapPartSearch,
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Part No',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  suffixIcon: Icon(Icons.search, size: 18),
                 ),
-              );
-            }).toList(),
-            onChanged: (v) {
-              entry.partNo = v;
-              onChanged();
-            },
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 2,
-          child: TextField(
-            controller: entry.qtyCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Qty',
-              border: OutlineInputBorder(),
-              isDense: true,
+                child: Text(
+                  _partDisplay(),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: effective != null ? Colors.black87 : Colors.grey,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
-            keyboardType: TextInputType.number,
-            onChanged: (_) => onChanged(),
           ),
-        ),
-        if (onRemove != null)
-          IconButton(
-            icon: const Icon(
-              Icons.remove_circle_outline,
-              color: Colors.red,
-              size: 20,
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: TextField(
+              controller: entry.qtyCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Qty',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              keyboardType: TextInputType.number,
+              onChanged: (_) => onChanged(),
             ),
-            onPressed: onRemove,
           ),
-      ],
-    ),
-  );
+          if (onRemove != null)
+            IconButton(
+              icon: const Icon(
+                Icons.remove_circle_outline,
+                color: Colors.red,
+                size: 20,
+              ),
+              onPressed: onRemove,
+            ),
+        ],
+      ),
+    );
+  }
 }
+
+// ══════════════════════════════════════════════════════════════════
+// Merge Lot Row
+// ══════════════════════════════════════════════════════════════════
 
 class _MergeLotRow extends StatelessWidget {
   final int index;
   final _MergeLotEntry entry;
   final List<String> availableLots;
+  final Map<String, String> crossTkLotMap; // ✅ lot_no → source_tk_id
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
 
@@ -1186,6 +1873,7 @@ class _MergeLotRow extends StatelessWidget {
     required this.index,
     required this.entry,
     required this.availableLots,
+    required this.crossTkLotMap,
     required this.onChanged,
     this.onRemove,
   });
@@ -1210,24 +1898,77 @@ class _MergeLotRow extends StatelessWidget {
           child: DropdownButtonFormField<String>(
             value: entry.fromLotNo,
             isExpanded: true,
-            menuMaxHeight: 280,
+            menuMaxHeight: 320,
             decoration: const InputDecoration(
               labelText: 'From Lot',
               border: OutlineInputBorder(),
               isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
             ),
-            items: availableLots
-                .map(
-                  (l) => DropdownMenuItem(
-                    value: l,
-                    child: Text(
+            // ✅ selected display = 1 บรรทัดเสมอ → กัน overflow ในช่อง
+            selectedItemBuilder: (context) => availableLots.map((l) {
+              final isCross = crossTkLotMap.containsKey(l);
+              return Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  l,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isCross ? Colors.orange.shade800 : null,
+                  ),
+                ),
+              );
+            }).toList(),
+            // menu items ยังโชว์ 2 บรรทัด (label + lot_no)
+            itemHeight: crossTkLotMap.keys.any((k) => availableLots.contains(k))
+                ? 56.0
+                : 48.0,
+            items: availableLots.map((l) {
+              final sourceTk = crossTkLotMap[l];
+              return DropdownMenuItem<String>(
+                value: l,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (sourceTk != null)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.swap_horiz,
+                            size: 11,
+                            color: Colors.orange.shade700,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            'Lot พัก จาก $sourceTk',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: Colors.orange.shade700,
+                              fontWeight: FontWeight.w600,
+                              height: 1.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    Text(
                       l,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: sourceTk != null ? Colors.orange.shade800 : null,
+                        height: 1.3,
+                      ),
                     ),
-                  ),
-                )
-                .toList(),
+                  ],
+                ),
+              );
+            }).toList(),
             onChanged: (v) {
               entry.fromLotNo = v;
               onChanged();
@@ -1269,10 +2010,8 @@ class _MergeLotRow extends StatelessWidget {
 class _InfoCard extends StatelessWidget {
   final String tkId;
   final Map<String, dynamic> tkDoc;
-
-  final String? baseLotNo; // ✅ base lot ที่ต้องโชว์ใน header
-  final List<String> currentLots; // ✅ lots ที่ทำต่อได้
-
+  final String? baseLotNo;
+  final List<String> currentLots;
   final String? stationId;
   final String? stationName;
   final String? machineId;
@@ -1293,45 +2032,33 @@ class _InfoCard extends StatelessWidget {
 
   Map<String, String> _parsePartFromLot(String lotNo) {
     var lot = lotNo.trim();
-
     final mRun = RegExp(r'-(\d+)$').firstMatch(lot);
-    if (mRun != null) {
-      lot = lot.substring(0, mRun.start);
-    }
-
-    if (lot.length > 7 && lot[6] == '-') {
-      lot = lot.substring(7);
-    }
-
+    if (mRun != null) lot = lot.substring(0, mRun.start);
+    if (lot.length > 7 && lot[6] == '-') lot = lot.substring(7);
     final segs = lot.split('-');
     final idxSpace = segs.indexWhere((x) => x.contains(' '));
-
     if (idxSpace <= 0) return {'part_no': '', 'part_name': ''};
-
-    final partNo = segs.take(idxSpace).join('-').trim();
-    final partName = segs.skip(idxSpace).join('-').trim();
-    return {'part_no': partNo, 'part_name': partName};
+    return {
+      'part_no': segs.take(idxSpace).join('-').trim(),
+      'part_name': segs.skip(idxSpace).join('-').trim(),
+    };
   }
 
   @override
   Widget build(BuildContext context) {
-    // ✅ Lot No ที่ต้องโชว์ด้านบน = base lot เท่านั้น
     final lotHeader = (baseLotNo ?? '').trim();
-
     var partNo = (tkDoc['part_no']?.toString() ?? '').trim();
     var partName = (tkDoc['part_name']?.toString() ?? '').trim();
 
     if (_looksLikeLotNo(partNo)) {
-      final parsed = _parsePartFromLot(partNo);
-      partNo = parsed['part_no'] ?? '';
-      partName = parsed['part_name'] ?? '';
+      final p = _parsePartFromLot(partNo);
+      partNo = p['part_no'] ?? '';
+      partName = p['part_name'] ?? '';
     }
-
-    // ถ้า partName ว่าง ลอง parse จาก base lot
     if (partName.isEmpty && _looksLikeLotNo(lotHeader)) {
-      final parsed = _parsePartFromLot(lotHeader);
-      partNo = partNo.isNotEmpty ? partNo : (parsed['part_no'] ?? '');
-      partName = parsed['part_name'] ?? '';
+      final p = _parsePartFromLot(lotHeader);
+      partNo = partNo.isNotEmpty ? partNo : (p['part_no'] ?? '');
+      partName = p['part_name'] ?? '';
     }
 
     final staId = (stationId?.trim().isNotEmpty ?? false)
@@ -1340,7 +2067,6 @@ class _InfoCard extends StatelessWidget {
     final staName = (stationName?.trim().isNotEmpty ?? false)
         ? stationName!.trim()
         : (tkDoc['op_sta_name']?.toString() ?? '-').trim();
-
     final mcId = (machineId?.trim().isNotEmpty ?? false)
         ? machineId!.trim()
         : (tkDoc['MC_id']?.toString() ?? '-').trim();
@@ -1365,17 +2091,12 @@ class _InfoCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-
             Text('Part No: ${partNo.isEmpty ? '-' : partNo}'),
             Text('Part Name: ${partName.isEmpty ? '-' : partName}'),
-
-            // ✅ โชว์ Lot No แค่ตัวเดียว (base lot)
             Text('Lot No: ${lotHeader.isEmpty ? '-' : lotHeader}'),
-
             const SizedBox(height: 4),
             Text('Station: $staId ($staName)'),
             Text('Machine: $mcId ($mcName)'),
-
             if (currentLots.isNotEmpty) ...[
               const Divider(height: 16),
               const Text(

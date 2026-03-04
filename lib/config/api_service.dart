@@ -4,19 +4,14 @@ import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://172.16.102.165:4030/api';
-
-  // Use a single client type everywhere to avoid middleware mismatch.
-  // Your backend routes expect "HH" for some endpoints (start/finish).
+  static const String baseUrl = 'http://172.16.102.22:4030/api';
   static const String _defaultClientType = 'HH';
 
-  // ── URI helper ─────────────────────────────────────────────
   static Uri _u(String path, [Map<String, String>? qp]) {
     final uri = Uri.parse('$baseUrl$path');
     return (qp == null || qp.isEmpty) ? uri : uri.replace(queryParameters: qp);
   }
 
-  // ── headers ────────────────────────────────────────────────
   static Map<String, String> _headers({
     required String token,
     String clientType = _defaultClientType,
@@ -28,7 +23,9 @@ class ApiService {
   };
 
   static Future<void> _guard(http.Response res) async {
-    if (res.statusCode == 401 || res.statusCode == 403) {
+    // 401 = token หมด/ไม่มี → force login
+    // 403 = มี token แต่ business logic ไม่ผ่าน → แค่แสดง error ไม่ force login
+    if (res.statusCode == 401) {
       await forceToLogin();
     }
   }
@@ -51,7 +48,6 @@ class ApiService {
     final body = <String, dynamic>{'username': username, 'password': password};
     if (opStaId != null && opStaId.isNotEmpty) body['op_sta_id'] = opStaId;
 
-    // IMPORTANT: use "HH" to match requireClientType(["HH"])
     return http.post(
       _u('/auth/login'),
       headers: const {
@@ -66,7 +62,6 @@ class ApiService {
   static Future<http.Response> logout() async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.post(
       _u('/auth/logout'),
       headers: _headers(token: token),
@@ -79,7 +74,6 @@ class ApiService {
   static Future<http.Response> getMachinesInStation() async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.get(
       _u('/machines/in-station'),
       headers: _headers(token: token),
@@ -89,17 +83,13 @@ class ApiService {
   }
 
   // ── Parts ──────────────────────────────────────────────────
-  /// GET /api/parts?q=...&limit=...
-  /// Backend should return: { "parts": [ {part_id, part_no, part_name}, ... ] }
   static Future<http.Response> getParts({String? q, int limit = 500}) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final qp = <String, String>{
       'limit': limit.toString(),
       if (q != null && q.trim().isNotEmpty) 'q': q.trim(),
     };
-
     final res = await http.get(
       _u('/parts', qp),
       headers: _headers(token: token),
@@ -112,7 +102,6 @@ class ApiService {
   static Future<http.Response> getTkDocById(String tkId) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.get(
       _u('/TKDocs/$tkId'),
       headers: _headers(token: token),
@@ -128,7 +117,6 @@ class ApiService {
   }) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.post(
       _u('/op-scan/start'),
       headers: _headers(token: token),
@@ -146,7 +134,6 @@ class ApiService {
   }) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.post(
       _u('/op-scan/finish'),
       headers: _headers(token: token),
@@ -164,7 +151,6 @@ class ApiService {
   static Future<http.Response> getActiveScans() async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.get(
       _u('/op-scan/active'),
       headers: _headers(token: token),
@@ -176,7 +162,6 @@ class ApiService {
   static Future<http.Response> getActiveScanByTkId(String tkId) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.get(
       _u('/op-scan/active/$tkId'),
       headers: _headers(token: token),
@@ -188,9 +173,26 @@ class ApiService {
   static Future<http.Response> getSummaryByTkId(String tkId) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
-
     final res = await http.get(
       _u('/op-scan/summary/$tkId'),
+      headers: _headers(token: token),
+    );
+    await _guard(res);
+    return res;
+  }
+
+  // ── Parked Lots ────────────────────────────────────────────
+  /// GET /api/op-scan/parked
+  /// operator → ดึง parked lots ของ station ตัวเอง (จาก token)
+  /// admin    → ส่ง op_sta_id ใน query string
+  static Future<http.Response> getParkedLots({String? opStaId}) async {
+    final token = await _token();
+    if (token == null) return http.Response('{"message":"No token"}', 401);
+    final qp = <String, String>{
+      if (opStaId != null && opStaId.isNotEmpty) 'op_sta_id': opStaId,
+    };
+    final res = await http.get(
+      _u('/op-scan/parked', qp),
       headers: _headers(token: token),
     );
     await _guard(res);

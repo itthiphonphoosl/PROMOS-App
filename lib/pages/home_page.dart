@@ -7,6 +7,7 @@ import 'scan_start_page.dart';
 import 'active_scan_page.dart';
 import 'summary_page.dart';
 import 'summary_search_page.dart';
+import 'parked_lots_page.dart'; // ✅ import หน้าใหม่
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -105,9 +106,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await forceToLogin();
   }
 
-  void _goTo(Widget page) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => page));
-  }
+  void _goTo(Widget page) =>
+      Navigator.push(context, MaterialPageRoute(builder: (_) => page));
 
   @override
   Widget build(BuildContext context) {
@@ -127,7 +127,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       body: Column(
         children: [
-          // User Info Banner
+          // ── User Info Banner ──
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
@@ -195,7 +195,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          '$_staId • $_staName',
+                          '$_staId  •  $_staName',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -209,7 +209,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
           ),
 
-          // Menu Grid
+          // ── Menu Grid ──
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -218,7 +218,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
                 children: [
-                  // Operator menus
+                  // ── Operator menus ──
                   if (_isOp) ...[
                     _MenuCard(
                       icon: Icons.qr_code_scanner,
@@ -234,14 +234,22 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       color: Colors.orange,
                       onTap: () => _goTo(const ActiveScanPage()),
                     ),
+                    // ✅ เมนูใหม่ — Lot ที่พักไว้
+                    _MenuCard(
+                      icon: Icons.inventory_2_outlined,
+                      label: 'Lot ที่พักไว้',
+                      subtitle: 'ดู Lot รอดำเนินการ',
+                      color: Colors.blue,
+                      onTap: () => _goTo(const ParkedLotsPage()),
+                    ),
                   ],
 
-                  // Common menus
+                  // ── Common menus ──
                   _MenuCard(
                     icon: Icons.summarize_outlined,
                     label: 'Summary',
                     subtitle: 'ดูสรุปถาด',
-                    color: Colors.blue,
+                    color: Colors.teal,
                     onTap: () => _goTo(const SummarySearchPage()),
                   ),
                   _MenuCard(
@@ -311,6 +319,7 @@ class _MenuCard extends StatelessWidget {
   final String subtitle;
   final Color color;
   final VoidCallback onTap;
+
   const _MenuCard({
     required this.icon,
     required this.label,

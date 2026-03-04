@@ -89,7 +89,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
       } else {
         CoolerAlert.show(
           context,
-          message: body['message']?.toString() ?? 'ไม่พบ TK นี้',
+          message: body['message']?.toString() ?? 'ไม่พบ Tracking No. นี้',
           type: CoolerAlertType.warning,
         );
       }
@@ -109,7 +109,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
     if (tkId.isEmpty) {
       CoolerAlert.show(
         context,
-        message: 'กรุณากรอก TK ID',
+        message: 'กรุณากรอก Tracking No.',
         type: CoolerAlertType.warning,
       );
       return;
@@ -156,8 +156,9 @@ class _ScanStartPageState extends State<ScanStartPage> {
         );
       } else {
         final msg = body['message']?.toString() ?? 'Start ไม่สำเร็จ';
-        final nextSta = body['next_sta']?.toString();
-        final nextStaName = body['next_sta_name']?.toString();
+        // [FIX] key เปลี่ยนจาก next_sta → suggested_next_sta
+        final nextSta = body['suggested_next_sta']?.toString();
+        final nextStaName = body['suggested_next_sta_name']?.toString();
 
         final display = (nextSta != null)
             ? '$msg\n\n➡ ถัดไป: $nextSta ($nextStaName)'
@@ -242,7 +243,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'สแกน / กรอก TK ID',
+                      'สแกน / กรอก Tracking No.',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 15,
@@ -255,7 +256,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
                           child: TextField(
                             controller: _tkCtrl,
                             decoration: const InputDecoration(
-                              hintText: 'TK2602240001',
+                              hintText: 'กรุณากรอก Tracking No.',
                               prefixIcon: Icon(Icons.qr_code),
                               border: OutlineInputBorder(),
                             ),

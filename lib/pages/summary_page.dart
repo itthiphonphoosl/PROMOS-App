@@ -18,6 +18,28 @@ class SummaryPage extends StatefulWidget {
 class _SummaryPageState extends State<SummaryPage> {
   bool _loading = true;
   Map<String, dynamic>? _data;
+  int _runSuffix(String lotNo) {
+    final m = RegExp(r'-(\d+)$').firstMatch(lotNo.trim());
+    if (m == null) return 1 << 30;
+    return int.tryParse(m.group(1)!) ?? (1 << 30);
+  }
+
+  int _toInt01(dynamic v, {int fallback = 0}) {
+    if (v == null) return fallback;
+    if (v is bool) return v ? 1 : 0;
+    if (v is num) return v.toInt();
+    final s = v.toString().trim().toLowerCase();
+    if (s == 'true') return 1;
+    if (s == 'false') return 0;
+    return int.tryParse(s) ?? fallback;
+  }
+
+  String _motherLotFromPayload() {
+    final lots = _allLotsFromPayload();
+    if (lots.isEmpty) return '-';
+    lots.sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+    return lots.first; // ✅ lot แม่ = suffix น้อยสุด (เช่น ...000220)
+  }
 
   @override
   void initState() {
@@ -72,6 +94,16 @@ class _SummaryPageState extends State<SummaryPage> {
       default:
         return '-';
     }
+  }
+
+  /// ดึง parked_lots จาก payload
+  List<Map<String, dynamic>> _parkedLots() {
+    // [FIX] รองรับทั้ง summary API (parked_lots) และ finish result (all_parked_lots)
+    final p = _data?['parked_lots'] ?? _data?['all_parked_lots'];
+    if (p is List) {
+      return p.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
+    return [];
   }
 
   /// ดึง list scans จาก payload
@@ -323,10 +355,7 @@ class _SummaryPageState extends State<SummaryPage> {
                             'Part Name',
                             current['part_name']?.toString() ?? '-',
                           ),
-                          _kv(
-                            'Current Lot',
-                            current['lot_no']?.toString() ?? '-',
-                          ),
+                          _kv('Lot No', _motherLotFromPayload()),
                           _kv(
                             'Current Station',
                             current['op_sta_id']?.toString() ?? '-',
@@ -401,6 +430,103 @@ class _SummaryPageState extends State<SummaryPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
+
+                  // ── [FIX] Parked Lots ─────────────────────
+                  if (_parkedLots().isNotEmpty) ...[
+                    Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      color: Colors.blue.shade50,
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.inventory_2_outlined,
+                                  color: Colors.blue,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Lot ที่พักอยู่ (${_parkedLots().length})',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            ..._parkedLots().map((pl) {
+                              final lotNo =
+                                  (pl['parked_lot_no'] ?? pl['lot_no'])
+                                      ?.toString() ??
+                                  '-';
+                              final qty =
+                                  (pl['parked_qty'] ?? pl['qty'])?.toString() ??
+                                  '-';
+                              final sta =
+                                  (pl['op_sta_id'] ?? pl['parked_at_sta'])
+                                      ?.toString() ??
+                                  '-';
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 6),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.blue.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.pause_circle_outline,
+                                      color: Colors.blue,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            lotNo,
+                                            style: const TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          Text(
+                                            'Station: $sta  •  Qty: $qty',
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
 
                   // ── Lots from payload ─────────────────────
                   Card(

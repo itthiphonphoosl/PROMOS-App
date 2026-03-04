@@ -1,3 +1,4 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/material.dart';
 import 'pages/login_page.dart';
 import 'pages/home_page.dart';
@@ -5,7 +6,7 @@ import 'services/auth_storage.dart';
 import 'services/app_nav.dart';
 
 void main() {
-  runApp(const PromosApp());
+  runApp(const ProviderScope(child: PromosApp()));
 }
 
 class PromosApp extends StatelessWidget {
