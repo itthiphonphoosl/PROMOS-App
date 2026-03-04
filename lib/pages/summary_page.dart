@@ -212,6 +212,23 @@ class _SummaryPageState extends State<SummaryPage> {
                       final toLot = t['to_lot_no']?.toString() ?? '-';
                       final qty = t['transfer_qty']?.toString() ?? '0';
                       final ts = t['transfer_ts']?.toString() ?? '-';
+                      final fromTk = t['from_tk_id']?.toString() ?? '';
+                      final toTk = t['to_tk_id']?.toString() ?? '';
+
+                      // lot_parked_status=1 → lot นี้ถูก mark พักไว้
+                      // BIT column → JSON อาจส่งมาเป็น true/false หรือ 1/0
+                      final _ps = t['lot_parked_status'];
+                      final isParked =
+                          _ps == true ||
+                          _ps == 1 ||
+                          _ps?.toString() == '1' ||
+                          _ps?.toString() == 'true';
+
+                      // from_tk ≠ to_tk → TK นี้ดึง lot พักจาก TK อื่นมาใช้ (Co-ID cross-TK)
+                      final isCrossTk =
+                          fromTk.isNotEmpty &&
+                          toTk.isNotEmpty &&
+                          fromTk != toTk;
 
                       return Card(
                         margin: const EdgeInsets.only(bottom: 10),
@@ -241,6 +258,55 @@ class _SummaryPageState extends State<SummaryPage> {
                                       ),
                                     ),
                                   ),
+                                  const SizedBox(width: 6),
+                                  // badge ส้ม: lot_parked_status=1 — lot พักของ TK นี้
+                                  if (isParked && !isCrossTk)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.orange.shade50,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: Colors.orange.shade300,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        fromTk.isNotEmpty
+                                            ? '🔵 Lot พักของ $fromTk'
+                                            : '🔵 Lot พัก',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.orange.shade700,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  // badge เขียว: ดึง lot พักจาก TK อื่นมาใช้
+                                  if (isCrossTk)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.green.shade50,
+                                        borderRadius: BorderRadius.circular(20),
+                                        border: Border.all(
+                                          color: Colors.green.shade300,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        '✅ นำ lot พักมาใช้จาก $fromTk',
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color: Colors.green.shade700,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
                                   const Spacer(),
                                   Text(
                                     'Qty: $qty',

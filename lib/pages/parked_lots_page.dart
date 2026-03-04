@@ -32,6 +32,10 @@ class _ParkedLotsPageState extends State<ParkedLotsPage> {
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList();
         });
+      } else if (res.statusCode == 404 ||
+          body['message']?.toString().toLowerCase() == 'not found') {
+        // ข้อ 4: ถ้าไม่พบ lot พัก → แสดง empty state ปกติ ไม่ต้อง alert
+        setState(() => _lots = []);
       } else {
         if (mounted) {
           CoolerAlert.show(

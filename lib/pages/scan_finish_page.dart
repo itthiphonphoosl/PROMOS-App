@@ -264,10 +264,13 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   }
 
   bool get _isSimpleFlow {
-    final activeLots = _currentLots.where((s) => s.trim().isNotEmpty).toList();
-    final parkedCount = _parkedLots.length + _crossTkParkedLots.length;
-    // simple flow = มี lot ที่ใช้ได้รวมกันทั้งหมดไม่เกิน 1
-    return (activeLots.length + parkedCount) <= 1;
+    final lots = _currentLots.where((s) => s.trim().isNotEmpty).toList();
+    // ข้อ 2: ถ้าเป็น first scan (tf=0, ยังไม่เคย transfer เลย)
+    //         → มี lot เดียวเสมอ → ห้ามเพิ่ม group ไม่ว่าจะมี parked lots จาก TK อื่นหรือเปล่า
+    if (_isFirstScan) return true;
+    // ถ้าเคย transfer แล้ว → ดูจำนวน active lots + parked lots รวมกัน
+    return lots.length <= 1 &&
+        !(_parkedLots.isNotEmpty || _crossTkParkedLots.isNotEmpty);
   }
 
   void _ensureOneGroup() {
@@ -377,6 +380,100 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         return;
       }
     }
+    // ข้อ 3: ตรวจหา active lots ที่ไม่ถูกเลือกเป็น from_lot → จะถูก auto-park
+    //   เฉพาะ active lots เท่านั้น (parked lots ไม่นับ เพราะถ้าไม่เลือกก็ยังพักอยู่เหมือนเดิม)
+    final selectedFromLots = <String>{};
+    for (final g in _groups) {
+      if (g.fromLotNo != null && g.fromLotNo!.isNotEmpty) {
+        selectedFromLots.add(g.fromLotNo!);
+      }
+      for (final m in g.mergeLots) {
+        if (m.fromLotNo != null && m.fromLotNo!.isNotEmpty) {
+          selectedFromLots.add(m.fromLotNo!);
+        }
+      }
+    }
+    final willBeParked = _currentLots
+        .where((l) => l.trim().isNotEmpty && !selectedFromLots.contains(l))
+        .toList();
+
+    if (willBeParked.isNotEmpty) {
+      // แสดง dialog ยืนยันก่อน
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.inventory_2_outlined, color: Colors.orange),
+              SizedBox(width: 8),
+              Text('Lot ที่จะถูกพักอัตโนมัติ'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Lot ต่อไปนี้ไม่ได้ถูกเลือก จะถูกพักไว้อัตโนมัติ:',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 10),
+              ...willBeParked.map(
+                (l) => Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(
+                        Icons.pause_circle_outline,
+                        color: Colors.orange,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          l,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'ต้องการดำเนินการต่อหรือไม่?',
+                style: TextStyle(fontSize: 13, color: Colors.grey),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('ยกเลิก'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text(
+                'ตกลง พักไว้',
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) {
+        if (mounted) setState(() => _finishing = false);
+        return; // user กด ยกเลิก → กลับไปแก้ไข
+      }
+    }
+
     setState(() => _finishing = true);
     try {
       final res = await ApiService.finishScan(
@@ -480,12 +577,19 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         .map((pl) => pl['parked_lot_no']?.toString() ?? '')
         .where((s) => s.isNotEmpty)
         .toList();
-    // ✅ รวม lots ทั้งหมด: active + own-parked + cross-TK parked
-    //    cross-TK lots ให้เลือกได้เสมอ (ไม่ขึ้นกับ _hasTransferHistory)
-    final allAvailableLots = [
-      ...(_hasTransferHistory ? [...lots, ...parkedLotNos] : lots),
-      ...crossTkLotNos,
-    ];
+
+    // ข้อ 1: parked lots (own + cross-TK) ใช้ได้เฉพาะ CO-ID (tf=3) เท่านั้น
+    // Master-ID (tf=1) และ Split-ID (tf=2) ใช้เฉพาะ active lots ของ TK ตัวเอง
+    // ดังนั้น allAvailableLots = active lots เสมอ
+    // → _GroupCard จะรับ parkedLotNos/crossTkLotNos แยกต่างหาก
+    //   แล้วรวมเข้าไปเฉพาะเมื่อ tfRsCode == 3 (ดูใน _GroupCard)
+    //
+    // [DISABLED - เดิมรวม parked lots ให้ทุก tf แต่ requirement บอกแค่ CO-ID]
+    // final allAvailableLots = [
+    //   ...(_hasTransferHistory ? [...lots, ...parkedLotNos] : lots),
+    //   ...crossTkLotNos,
+    // ];
+    final allAvailableLots = List<String>.from(lots); // active lots เท่านั้น
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
@@ -834,8 +938,10 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 index: i,
                 entry: _groups[i],
                 availableLots: lotsForThisGroup,
-                selfUsedMergeLots:
-                    selfUsedMergeLots, // ✅ กัน merge rows ซ้ำกันเอง
+                selfUsedMergeLots: selfUsedMergeLots,
+                // ข้อ 1: parked lots ส่งแยก — _GroupCard รวมเข้า merge rows เฉพาะ tf=3
+                ownParkedLotNos: parkedLotNos,
+                crossTkParkedLotNos: crossTkLotNos,
                 availableParts: _parts,
                 isFirstScan: _isFirstScan,
                 crossTkLotMap: _crossTkLotMap,
@@ -1097,9 +1203,11 @@ class _MergeLotEntry {
 class _GroupCard extends StatefulWidget {
   final int index;
   final _GroupEntry entry;
-  final List<String> availableLots;
-  final Set<String>
-  selfUsedMergeLots; // ✅ lots ที่ merge rows อื่นใน group นี้เลือกไปแล้ว
+  final List<String> availableLots; // active lots เท่านั้น (tf=1/2)
+  final Set<String> selfUsedMergeLots;
+  final List<String> ownParkedLotNos; // own-TK parked lots (tf=3 เท่านั้น)
+  final List<String>
+  crossTkParkedLotNos; // cross-TK parked lots (tf=3 เท่านั้น)
   final List<Map<String, dynamic>> availableParts;
   final bool isFirstScan;
   final Map<String, String> crossTkLotMap;
@@ -1112,6 +1220,8 @@ class _GroupCard extends StatefulWidget {
     required this.entry,
     required this.availableLots,
     required this.selfUsedMergeLots,
+    required this.ownParkedLotNos,
+    required this.crossTkParkedLotNos,
     required this.availableParts,
     required this.isFirstScan,
     required this.crossTkLotMap,
@@ -1126,7 +1236,22 @@ class _GroupCard extends StatefulWidget {
 class _GroupCardState extends State<_GroupCard> {
   _GroupEntry get g => widget.entry;
 
-  bool get _canCoId => widget.availableLots.length >= 2;
+  // ข้อ 1: CO-ID เท่านั้นที่ใช้ parked lots ได้
+  // ต้องมี active lots + parked lots รวมกัน >= 2 จึงจะ CO ได้
+  bool get _canCoId {
+    final totalForCoId =
+        widget.availableLots.length +
+        widget.ownParkedLotNos.length +
+        widget.crossTkParkedLotNos.length;
+    return totalForCoId >= 2;
+  }
+
+  // lots สำหรับ merge rows (tf=3): active + own-parked + cross-TK parked
+  List<String> get _mergeAvailableLots => [
+    ...widget.availableLots,
+    ...widget.ownParkedLotNos,
+    ...widget.crossTkParkedLotNos,
+  ];
 
   // ✅ Helper: สร้าง DropdownMenuItem<String> พร้อม cross-TK label — ไม่ overflow
   static DropdownMenuItem<String> _buildLotDropdownItem(
@@ -1479,7 +1604,7 @@ class _GroupCardState extends State<_GroupCard> {
               ),
               const SizedBox(height: 8),
               ...List.generate(g.mergeLots.length, (i) {
-                // ✅ กัน lot ซ้ำภายใน merge rows: ซ่อน lot ที่ row อื่นเลือกไปแล้ว
+                // กัน lot ซ้ำภายใน merge rows: ซ่อน lot ที่ row อื่นเลือกไปแล้ว
                 final otherMergePicked = g.mergeLots
                     .asMap()
                     .entries
@@ -1491,9 +1616,10 @@ class _GroupCardState extends State<_GroupCard> {
                     )
                     .map((e) => e.value.fromLotNo!)
                     .toSet();
-                // รวมกับ lots ที่ group อื่น (cross-group) ใช้แล้ว — ได้มาจาก parent ผ่าน selfUsedMergeLots
-                // (selfUsedMergeLots ณ ตอน build อาจ stale เล็กน้อย แต่ cross-group dedup จัดการจาก availableLots แล้ว)
-                final lotsForRow = widget.availableLots
+                // ข้อ 1: merge rows (tf=3) ใช้ _mergeAvailableLots
+                //   = active lots + own-parked + cross-TK parked
+                // (cross-group dedup จัดการจาก availableLots ที่กรองมาแล้ว)
+                final lotsForRow = _mergeAvailableLots
                     .where((l) => !otherMergePicked.contains(l))
                     .toList();
 
