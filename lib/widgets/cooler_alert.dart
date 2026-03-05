@@ -36,7 +36,7 @@ class CoolerAlert {
           color: Colors.black.withOpacity(0.18),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 360),
+              constraints: const BoxConstraints(maxWidth: 520),
               child: _AlertCard(
                 title: title,
                 message: message,

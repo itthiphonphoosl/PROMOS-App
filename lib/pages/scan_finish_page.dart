@@ -586,6 +586,126 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   }
 
   @override
+  // ── Pre-Finish Summary Box ──
+  Widget _buildPreFinishSummary() {
+    final good = _goodQty();
+    final total = good + (int.tryParse(_scrapCtrl.text.trim()) ?? 0);
+    final sumGrp = _sumGroupQty();
+    final remain = good - sumGrp;
+    final isOver = remain < 0;
+    final isExact = remain == 0 && good > 0;
+
+    // Per-group park preview (tf=2 only)
+    final groupParkLines = <String>[];
+    for (int i = 0; i < _groups.length; i++) {
+      final g = _groups[i];
+      if (g.tfRsCode != 2) continue;
+      final gQty = int.tryParse(g.qtyCtrl.text.trim()) ?? 0;
+      final splitSum = g.splits.fold(
+        0,
+        (a, s) => a + (int.tryParse(s.qtyCtrl.text.trim()) ?? 0),
+      );
+      final diff = gQty - splitSum;
+      if (diff > 0) {
+        groupParkLines.add(
+          'Group ${i + 1}: Split รวม $splitSum / $gQty  →  จะพัก $diff ชิ้น',
+        );
+      }
+    }
+
+    final Color borderColor;
+    final Color bgColor;
+    if (isOver) {
+      borderColor = Colors.red.shade300;
+      bgColor = Colors.red.shade50;
+    } else if (groupParkLines.isNotEmpty) {
+      borderColor = Colors.blue.shade300;
+      bgColor = Colors.blue.shade50;
+    } else if (isExact) {
+      borderColor = Colors.green.shade300;
+      bgColor = Colors.green.shade50;
+    } else {
+      borderColor = Colors.orange.shade300;
+      bgColor = Colors.orange.shade50;
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Total qty (OK + NG) = $total',
+            style: const TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Sum Group qty = $sumGrp  (ต้องเท่ากับ จำนวน OK = $good)',
+            style: const TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            isOver
+                ? '⚠️ เกิน จำนวน OK ${remain.abs()} ชิ้น'
+                : isExact && groupParkLines.isEmpty
+                ? '✅ ครบพอดี'
+                : remain > 0
+                ? '🔵 ยังเหลือ $remain ชิ้น → จะพักอัตโนมัติ'
+                : '✅ ครบพอดี',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: isOver
+                  ? Colors.red.shade800
+                  : groupParkLines.isNotEmpty
+                  ? Colors.blue.shade800
+                  : isExact
+                  ? Colors.green.shade800
+                  : Colors.orange.shade800,
+            ),
+          ),
+          // Per-group park warnings
+          if (groupParkLines.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Divider(height: 1),
+            const SizedBox(height: 8),
+            const Text(
+              '📦 Lot ที่จะพักตาม Group:',
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            ...groupParkLines.map(
+              (line) => Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Row(
+                  children: [
+                    const Icon(Icons.circle, size: 7, color: Colors.blue),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        line,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.blue.shade800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget build(BuildContext context) {
     final lots = _currentLots;
     // [FIX] ให้เพิ่ม Group ได้เลยถ้ามี lot มากกว่า 1
@@ -990,7 +1110,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 foregroundColor: Colors.orange,
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            // ── Pre-Finish Summary ──
+            _buildPreFinishSummary(),
+            const SizedBox(height: 12),
 
             SizedBox(
               height: 52,
