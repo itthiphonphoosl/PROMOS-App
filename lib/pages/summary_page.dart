@@ -215,6 +215,12 @@ class _SummaryPageState extends State<SummaryPage> {
                       final fromTk = t['from_tk_id']?.toString() ?? '';
                       final toTk = t['to_tk_id']?.toString() ?? '';
 
+                      // ✅ color info (STA006)
+                      final colorId = t['color_id'];
+                      final colorNo = t['color_no']?.toString() ?? '';
+                      final colorName = t['color_name']?.toString() ?? '';
+                      final hasColor = colorId != null && colorNo.isNotEmpty;
+
                       // lot_parked_status=1 → lot นี้ถูก mark พักไว้
                       // BIT column → JSON อาจส่งมาเป็น true/false หรือ 1/0
                       final _ps = t['lot_parked_status'];
@@ -319,6 +325,14 @@ class _SummaryPageState extends State<SummaryPage> {
                               const SizedBox(height: 8),
                               _kvSmall('From', fromLot),
                               _kvSmall('To', toLot),
+                              // ✅ แสดงสีเฉพาะ row ที่มี color_id (STA006)
+                              if (hasColor)
+                                _kvSmall(
+                                  '🎨 สี',
+                                  colorName.isNotEmpty
+                                      ? '$colorNo  •  $colorName'
+                                      : colorNo,
+                                ),
                               _kvSmall('Time', ts),
                             ],
                           ),

@@ -4,7 +4,7 @@ import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://172.16.102.22:4030/api';
+  static const String baseUrl = 'http://172.16.12.16:4030/api';
   static const String _defaultClientType = 'HH';
 
   static Uri _u(String path, [Map<String, String>? qp]) {
@@ -98,6 +98,15 @@ class ApiService {
     return res;
   }
 
+  // ── Colors ────────────────────────────────────────────────────
+  static Future<http.Response> getColors() async {
+    final token = await _token();
+    if (token == null) return http.Response('{"message":"No token"}', 401);
+    final res = await http.get(_u('/colors'), headers: _headers(token: token));
+    await _guard(res);
+    return res;
+  }
+
   // ── TK Documents ───────────────────────────────────────────
   static Future<http.Response> getTkDocById(String tkId) async {
     final token = await _token();
@@ -131,18 +140,21 @@ class ApiService {
     required int goodQty,
     required int scrapQty,
     required List<Map<String, dynamic>> groups,
+    int? colorId, // STA006 เท่านั้น
   }) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
+    final bodyMap = <String, dynamic>{
+      'op_sc_id': opScId,
+      'good_qty': goodQty,
+      'scrap_qty': scrapQty,
+      'groups': groups,
+      if (colorId != null) 'color_id': colorId,
+    };
     final res = await http.post(
       _u('/op-scan/finish'),
       headers: _headers(token: token),
-      body: jsonEncode({
-        'op_sc_id': opScId,
-        'good_qty': goodQty,
-        'scrap_qty': scrapQty,
-        'groups': groups,
-      }),
+      body: jsonEncode(bodyMap),
     );
     await _guard(res);
     return res;

@@ -245,6 +245,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
   List<Map<String, dynamic>> _parts = [];
   bool _loadingParts = true;
+  List<Map<String, dynamic>> _colors = [];
 
   int _goodQty() => int.tryParse(_goodCtrl.text.trim()) ?? 0;
   int _sumGroupQty() =>
@@ -257,6 +258,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   void initState() {
     super.initState();
     _loadParts();
+    _loadColors();
     _loadCurrentLotsFromSummary();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       setState(() => _ensureOneGroup());
@@ -290,6 +292,22 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       }
     } catch (_) {}
     if (mounted) setState(() => _loadingParts = false);
+  }
+
+  Future<void> _loadColors() async {
+    try {
+      final res = await ApiService.getColors();
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.statusCode == 200 && mounted) {
+        // รองรับทั้ง { colors: [...] } และ { items: [...] }
+        final raw = body['colors'] ?? body['items'] ?? body['data'] ?? [];
+        setState(() {
+          _colors = (raw as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+        });
+      }
+    } catch (_) {}
   }
 
   @override
@@ -386,6 +404,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     for (final g in _groups) {
       if (g.fromLotNo != null && g.fromLotNo!.isNotEmpty) {
         selectedFromLots.add(g.fromLotNo!);
+      } else if (_isFirstScan && _currentLots.length == 1) {
+        // [FIX] isFirstScan + lot เดียว → ล็อคอัตโนมัติ
+        // g.fromLotNo อาจเป็น null ถ้า _autoLockFromLot() วิ่งก่อน lots โหลดเสร็จ
+        // → ถือว่า lot นั้นถูกเลือกอยู่แล้ว ไม่ต้อง auto-park
+        selectedFromLots.add(_currentLots.first);
       }
       for (final m in g.mergeLots) {
         if (m.fromLotNo != null && m.fromLotNo!.isNotEmpty) {
@@ -481,6 +504,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         goodQty: good,
         scrapQty: scrap,
         groups: _groups.map((g) => g.toJson()).toList(),
+        // ✅ color_id ตอนนี้อยู่ใน groups แต่ละตัวแล้ว (per-group / per-split)
       );
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
@@ -686,6 +710,9 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                                   .abs()),
                         );
                         final remain = g - sumGrp;
+
+                        // แสดง indicator เฉพาะเมื่อมี group มากกว่า 1
+                        if (_groups.length <= 1) return const SizedBox.shrink();
 
                         if (total <= 0 && sumGrp <= 0)
                           return const SizedBox.shrink();
@@ -943,6 +970,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 ownParkedLotNos: parkedLotNos,
                 crossTkParkedLotNos: crossTkLotNos,
                 availableParts: _parts,
+                availableColors: _colors, // ✅ STA006
+                staId: _staId, // ✅ STA006 check
                 isFirstScan: _isFirstScan,
                 crossTkLotMap: _crossTkLotMap,
                 onChanged: () => setState(() {}),
@@ -1092,6 +1121,7 @@ class _GroupEntry {
   String?
   outPartNoGroup; // tf=2: out_part_no (group level, สำหรับ parked remainder)
   String? defaultPartNo;
+  int? colorId; // STA006 only — group/lot level color
 
   final List<_SplitEntry> splits = [];
 
@@ -1144,19 +1174,19 @@ class _GroupEntry {
     final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
 
     if (tfRsCode == 1) {
-      // [FIX] API ต้องการ out_part_no สำหรับ tf=1
       return {
         'tf_rs_code': 1,
         'qty': qty,
         'out_part_no': outPartNo ?? defaultPartNo ?? '',
         if (fromLotNo != null && fromLotNo!.isNotEmpty)
           'from_lot_no': fromLotNo,
+        if (colorId != null) 'color_id': colorId,
       };
     }
     if (tfRsCode == 2) {
       return {
         'tf_rs_code': 2,
-        'qty': qty, // ← เพิ่มบรรทัดนี้
+        'qty': qty,
         'out_part_no': outPartNoGroup ?? defaultPartNo ?? '',
         if (fromLotNo != null && fromLotNo!.isNotEmpty)
           'from_lot_no': fromLotNo,
@@ -1165,15 +1195,17 @@ class _GroupEntry {
               (s) => {
                 'out_part_no': s.partNo ?? '',
                 'qty': int.tryParse(s.qtyCtrl.text.trim()) ?? 0,
+                if (s.colorId != null) 'color_id': s.colorId,
               },
             )
             .toList(),
       };
     }
-    // tf=3: qty auto-sum ที่ server จาก merge_lots
+    // tf=3
     return {
       'tf_rs_code': 3,
       'out_part_no': outPartNoMerge ?? '',
+      if (colorId != null) 'color_id': colorId,
       'merge_lots': mergeLots
           .map(
             (m) => {
@@ -1188,6 +1220,7 @@ class _GroupEntry {
 
 class _SplitEntry {
   String? partNo;
+  int? colorId; // STA006 only — per-split color
   final qtyCtrl = TextEditingController();
 }
 
@@ -1209,6 +1242,8 @@ class _GroupCard extends StatefulWidget {
   final List<String>
   crossTkParkedLotNos; // cross-TK parked lots (tf=3 เท่านั้น)
   final List<Map<String, dynamic>> availableParts;
+  final List<Map<String, dynamic>> availableColors; // ✅ STA006: color list
+  final String? staId; // ✅ ใช้ตรวจว่าเป็น STA006 หรือไม่
   final bool isFirstScan;
   final Map<String, String> crossTkLotMap;
   final VoidCallback onChanged;
@@ -1223,6 +1258,8 @@ class _GroupCard extends StatefulWidget {
     required this.ownParkedLotNos,
     required this.crossTkParkedLotNos,
     required this.availableParts,
+    required this.availableColors,
+    required this.staId,
     required this.isFirstScan,
     required this.crossTkLotMap,
     required this.onChanged,
@@ -1235,6 +1272,9 @@ class _GroupCard extends StatefulWidget {
 
 class _GroupCardState extends State<_GroupCard> {
   _GroupEntry get g => widget.entry;
+
+  // ✅ STA006: แสดง color picker
+  bool get _isSta006 => (widget.staId ?? '').trim() == 'STA006';
 
   // ข้อ 1: CO-ID เท่านั้นที่ใช้ parked lots ได้
   // ต้องมี active lots + parked lots รวมกัน >= 2 จึงจะ CO ได้
@@ -1426,18 +1466,20 @@ class _GroupCardState extends State<_GroupCard> {
             ),
             const SizedBox(height: 12),
 
-            // Qty
-            TextField(
-              controller: g.qtyCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Qty ของ Group นี้',
-                border: OutlineInputBorder(),
-                helperText: 'รวมทุก Group ต้องไม่เกิน จำนวน OK',
+            // Qty standalone — แสดงเฉพาะ non-STA006 (STA006 ทุก tf ย้าย Qty เข้า row แล้ว)
+            if (!_isSta006) ...[
+              TextField(
+                controller: g.qtyCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Qty ของ Group นี้',
+                  border: OutlineInputBorder(),
+                  helperText: 'รวมทุก Group ต้องไม่เกิน จำนวน OK',
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (_) => widget.onChanged(),
               ),
-              keyboardType: TextInputType.number,
-              onChanged: (_) => widget.onChanged(),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+            ],
 
             // From Lot (tf=1 / tf=2)
             if ((g.tfRsCode == 1 || g.tfRsCode == 2) &&
@@ -1535,9 +1577,64 @@ class _GroupCardState extends State<_GroupCard> {
               const SizedBox(height: 12),
             ],
 
-            // [FIX UX] tf=1 / tf=2 ไม่ต้องโชว์ Out Part No ซ้ำ
-            // → ใช้ defaultPartNo อัตโนมัติ (ส่งใน toJson() อยู่แล้ว)
-            // → ถ้า operator ต้องการเปลี่ยน part ค่อยเพิ่มปุ่มภายหลัง
+            // ── tf=1: [Out Part No][สี][Qty] same row (STA006) ──
+            if (g.tfRsCode == 1) ...[
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: _PartPickerField(
+                        label: 'Out Part No',
+                        value: g.outPartNo,
+                        defaultValue: g.defaultPartNo,
+                        parts: widget.availableParts,
+                        onPicked: (v) => setState(() {
+                          g.outPartNo = v;
+                          widget.onChanged();
+                        }),
+                      ),
+                    ),
+                    if (_isSta006) const SizedBox(width: 6),
+                    if (_isSta006)
+                      Expanded(
+                        child: _ColorPickerField(
+                          label: 'สี',
+                          colorId: g.colorId,
+                          colors: widget.availableColors,
+                          onChanged: (v) => setState(() {
+                            g.colorId = v;
+                            widget.onChanged();
+                          }),
+                        ),
+                      ),
+                    if (_isSta006) const SizedBox(width: 6),
+                    if (_isSta006)
+                      Expanded(
+                        child: TextField(
+                          controller: g.qtyCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Qty',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 14,
+                            ),
+                          ),
+                          keyboardType: TextInputType.number,
+                          maxLines: null,
+                          expands: true,
+                          onChanged: (_) => widget.onChanged(),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // [FIX UX] tf=2: Splits section + color per split (STA006)
             if (g.tfRsCode == 2) ...[
               const Text(
                 'Splits:',
@@ -1555,6 +1652,8 @@ class _GroupCardState extends State<_GroupCard> {
                   index: i,
                   entry: g.splits[i],
                   availableParts: widget.availableParts,
+                  availableColors: widget.availableColors,
+                  isSta006: _isSta006,
                   defaultPartNo: g.defaultPartNo, // ✅ ส่ง default ลงไป
                   onChanged: widget.onChanged,
                   onRemove: g.splits.length > 1
@@ -1571,6 +1670,10 @@ class _GroupCardState extends State<_GroupCard> {
                       widget.onChanged();
                     },
                   ),
+                  onColorChanged: (v) => setState(() {
+                    g.splits[i].colorId = v;
+                    widget.onChanged();
+                  }),
                 ),
               ),
               TextButton.icon(
@@ -1586,16 +1689,57 @@ class _GroupCardState extends State<_GroupCard> {
 
             // tf=3: CO-ID
             if (g.tfRsCode == 3) ...[
-              // ✅ out_part_no searchable
-              _PartPickerField(
-                label: 'Out Part No (ผลลัพธ์รวม)',
-                value: g.outPartNoMerge,
-                defaultValue: g.defaultPartNo,
-                parts: widget.availableParts,
-                onPicked: (v) => setState(() {
-                  g.outPartNoMerge = v;
-                  widget.onChanged();
-                }),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: _PartPickerField(
+                        label: 'Out Part No (ผลลัพธ์รวม)',
+                        value: g.outPartNoMerge,
+                        defaultValue: g.defaultPartNo,
+                        parts: widget.availableParts,
+                        onPicked: (v) => setState(() {
+                          g.outPartNoMerge = v;
+                          widget.onChanged();
+                        }),
+                      ),
+                    ),
+                    if (_isSta006) const SizedBox(width: 6),
+                    if (_isSta006)
+                      Expanded(
+                        child: _ColorPickerField(
+                          label: 'สี',
+                          colorId: g.colorId,
+                          colors: widget.availableColors,
+                          onChanged: (v) => setState(() {
+                            g.colorId = v;
+                            widget.onChanged();
+                          }),
+                        ),
+                      ),
+                    if (_isSta006) const SizedBox(width: 6),
+                    if (_isSta006)
+                      Expanded(
+                        child: TextField(
+                          controller: g.qtyCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Qty',
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 14,
+                            ),
+                          ),
+                          keyboardType: TextInputType.number,
+                          maxLines: null,
+                          expands: true,
+                          onChanged: (_) => widget.onChanged(),
+                        ),
+                      ),
+                  ],
+                ),
               ),
               const SizedBox(height: 12),
               const Text(
@@ -1706,6 +1850,11 @@ class _PartPickerField extends StatelessWidget {
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 14,
+          ),
           suffixIcon: const Icon(Icons.search),
         ),
         child: Text(
@@ -1879,29 +2028,34 @@ class _PartSearchSheetState extends State<_PartSearchSheet> {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Split Row (พร้อม search + default part)
+// Split Row (พร้อม search + default part + STA006 color picker)
 // ══════════════════════════════════════════════════════════════════
 
 class _SplitRow extends StatelessWidget {
   final int index;
   final _SplitEntry entry;
   final List<Map<String, dynamic>> availableParts;
+  final List<Map<String, dynamic>> availableColors;
+  final bool isSta006;
   final String? defaultPartNo;
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
   final VoidCallback onTapPartSearch;
+  final ValueChanged<int?> onColorChanged;
 
   const _SplitRow({
     required this.index,
     required this.entry,
     required this.availableParts,
+    required this.availableColors,
+    required this.isSta006,
     required this.defaultPartNo,
     required this.onChanged,
     required this.onTapPartSearch,
+    required this.onColorChanged,
     this.onRemove,
   });
 
-  // ✅ โชว์แค่ part_no จริง ไม่เอา lot number
   String _partDisplay() {
     final v = entry.partNo ?? defaultPartNo ?? '';
     if (v.isEmpty) return 'เลือก Part No';
@@ -1919,65 +2073,329 @@ class _SplitRow extends StatelessWidget {
     final effective = entry.partNo ?? defaultPartNo;
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 28,
-            child: Text(
-              '${index + 1}.',
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-                color: Colors.grey,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: 24,
+              child: Center(
+                child: Text(
+                  '${index + 1}.',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey,
+                  ),
+                ),
               ),
             ),
-          ),
-          // ✅ tap → search sheet
-          Expanded(
-            flex: 3,
-            child: InkWell(
-              onTap: onTapPartSearch,
-              child: InputDecorator(
+            Expanded(
+              child: InkWell(
+                onTap: onTapPartSearch,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Part No',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 14,
+                    ),
+                    suffixIcon: Icon(Icons.search, size: 18),
+                  ),
+                  child: Text(
+                    _partDisplay(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: effective != null ? Colors.black87 : Colors.grey,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
+            ),
+            if (isSta006) const SizedBox(width: 6),
+            if (isSta006)
+              Expanded(
+                child: _ColorPickerField(
+                  label: 'สี',
+                  colorId: entry.colorId,
+                  colors: availableColors,
+                  onChanged: onColorChanged,
+                ),
+              ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: TextField(
+                controller: entry.qtyCtrl,
                 decoration: const InputDecoration(
-                  labelText: 'Part No',
+                  labelText: 'Qty',
                   border: OutlineInputBorder(),
                   isDense: true,
-                  suffixIcon: Icon(Icons.search, size: 18),
-                ),
-                child: Text(
-                  _partDisplay(),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: effective != null ? Colors.black87 : Colors.grey,
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 14,
                   ),
-                  overflow: TextOverflow.ellipsis,
+                ),
+                keyboardType: TextInputType.number,
+                maxLines: null,
+                expands: true,
+                onChanged: (_) => onChanged(),
+              ),
+            ),
+            if (onRemove != null)
+              IconButton(
+                icon: const Icon(
+                  Icons.remove_circle_outline,
+                  color: Colors.red,
+                  size: 20,
+                ),
+                onPressed: onRemove,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ✅ safe int parser — รองรับ JSON ที่อาจส่ง number เป็น int หรือ double
+int? _safeInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is double) return v.toInt();
+  return int.tryParse(v.toString());
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ✅ Color Picker Field — STA006 only (Bottom Sheet style like _PartPickerField)
+// ══════════════════════════════════════════════════════════════════
+
+class _ColorPickerField extends StatelessWidget {
+  final String label;
+  final int? colorId;
+  final List<Map<String, dynamic>> colors;
+  final ValueChanged<int?> onChanged;
+
+  const _ColorPickerField({
+    required this.label,
+    required this.colorId,
+    required this.colors,
+    required this.onChanged,
+  });
+
+  String _displayText() {
+    if (colorId == null) return 'เลือกสี';
+    final c = colors.firstWhere(
+      // ✅ safe compare — JSON อาจส่ง color_id เป็น int หรือ double
+      (c) => _safeInt(c['color_id']) == colorId,
+      orElse: () => {},
+    );
+    if (c.isEmpty) return 'เลือกสี';
+    final no = c['color_no']?.toString() ?? '';
+    final name = c['color_name']?.toString() ?? '';
+    return name.isNotEmpty ? '$no  •  $name' : no;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _ColorSearchSheet(
+          label: label,
+          colors: colors,
+          currentColorId: colorId,
+          onPicked: onChanged,
+        ),
+      ),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: '🎨 $label',
+          border: const OutlineInputBorder(),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 14,
+          ),
+          suffixIcon: const Icon(Icons.palette_outlined, size: 20),
+        ),
+        child: Text(
+          _displayText(),
+          style: TextStyle(
+            fontSize: 14,
+            color: colorId != null ? Colors.black87 : Colors.grey,
+          ),
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// ✅ Color Search Bottom Sheet
+// ──────────────────────────────────────────────────────────────────
+
+class _ColorSearchSheet extends StatefulWidget {
+  final String label;
+  final List<Map<String, dynamic>> colors;
+  final int? currentColorId;
+  final ValueChanged<int?> onPicked;
+
+  const _ColorSearchSheet({
+    required this.label,
+    required this.colors,
+    required this.currentColorId,
+    required this.onPicked,
+  });
+
+  @override
+  State<_ColorSearchSheet> createState() => _ColorSearchSheetState();
+}
+
+class _ColorSearchSheetState extends State<_ColorSearchSheet> {
+  final _searchCtrl = TextEditingController();
+  List<Map<String, dynamic>> _filtered = [];
+
+  @override
+  void initState() {
+    super.initState();
+    // กรองเฉพาะ active colors (color_status = 1)
+    final active = widget.colors.where((c) {
+      final s = c['color_status'];
+      if (s == null) return true;
+      if (s is bool) return s;
+      return int.tryParse(s.toString()) == 1;
+    }).toList();
+    _filtered = active;
+    _searchCtrl.addListener(() {
+      final q = _searchCtrl.text.trim().toLowerCase();
+      setState(() {
+        _filtered = q.isEmpty
+            ? active
+            : active.where((c) {
+                final no = (c['color_no']?.toString() ?? '').toLowerCase();
+                final name = (c['color_name']?.toString() ?? '').toLowerCase();
+                return no.contains(q) || name.contains(q);
+              }).toList();
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      initialChildSize: 0.65,
+      minChildSize: 0.4,
+      maxChildSize: 0.9,
+      builder: (ctx, ctrl) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // handle bar
+            Container(
+              margin: const EdgeInsets.only(top: 8, bottom: 4),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Text(
+                widget.label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: TextField(
-              controller: entry.qtyCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Qty',
-                border: OutlineInputBorder(),
-                isDense: true,
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  hintText: 'ค้นหา Color No / Color Name...',
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  isDense: true,
+                ),
               ),
-              keyboardType: TextInputType.number,
-              onChanged: (_) => onChanged(),
             ),
-          ),
-          if (onRemove != null)
-            IconButton(
-              icon: const Icon(
-                Icons.remove_circle_outline,
-                color: Colors.red,
-                size: 20,
-              ),
-              onPressed: onRemove,
+            Expanded(
+              child: _filtered.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'ไม่พบสี',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    )
+                  : ListView.separated(
+                      controller: ctrl,
+                      itemCount: _filtered.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, i) {
+                        final c = _filtered[i];
+                        // ✅ safe parse — JSON อาจส่ง color_id เป็น int หรือ double
+                        final cId = _safeInt(c['color_id']) ?? 0;
+                        final cNo = c['color_no']?.toString() ?? '';
+                        final cName = c['color_name']?.toString() ?? '';
+                        final selected = cId == (widget.currentColorId ?? -1);
+                        return ListTile(
+                          selected: selected,
+                          selectedColor: Colors.orange,
+                          selectedTileColor: Colors.orange.shade50,
+                          leading: selected
+                              ? const Icon(
+                                  Icons.check_circle,
+                                  color: Colors.orange,
+                                )
+                              : const Icon(
+                                  Icons.radio_button_unchecked,
+                                  color: Colors.grey,
+                                ),
+                          title: Text(
+                            cNo,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                          subtitle: cName.isNotEmpty
+                              ? Text(
+                                  cName,
+                                  style: const TextStyle(fontSize: 11),
+                                )
+                              : null,
+                          onTap: () {
+                            widget.onPicked(_safeInt(c['color_id']));
+                            Navigator.pop(context);
+                          },
+                        );
+                      },
+                    ),
             ),
-        ],
+          ],
+        ),
       ),
     );
   }
