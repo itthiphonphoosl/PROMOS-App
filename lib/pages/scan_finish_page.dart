@@ -497,6 +497,228 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       }
     }
 
+    // ── ตรวจ tf=2 groups ที่ splits ไม่ครบ qty → จะพักส่วนที่เหลือ ──
+    final splitParkInfo = <Map<String, dynamic>>[];
+    for (int i = 0; i < _groups.length; i++) {
+      final g = _groups[i];
+      if (g.tfRsCode != 2) continue;
+      final gQty = int.tryParse(g.qtyCtrl.text.trim()) ?? 0;
+      final splitSum = g.splits.fold(
+        0,
+        (a, s) => a + (int.tryParse(s.qtyCtrl.text.trim()) ?? 0),
+      );
+      final diff = gQty - splitSum;
+      if (diff > 0) {
+        final lotNo =
+            g.fromLotNo ??
+            (_isFirstScan && _currentLots.length == 1
+                ? _currentLots.first
+                : null);
+        splitParkInfo.add({
+          'group': i + 1,
+          'lot': lotNo ?? '(ไม่ระบุ lot)',
+          'diff': diff,
+          'gQty': gQty,
+          'splitSum': splitSum,
+        });
+      }
+    }
+
+    if (splitParkInfo.isNotEmpty) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 480),
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E7),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: const Color(0xFFE67E22).withOpacity(0.5),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFF39C12).withOpacity(0.2),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // แถบสีบน
+                Container(
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFF39C12),
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(20),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 16, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // header row
+                      Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF39C12),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFFF39C12,
+                                  ).withOpacity(0.35),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.inventory_2_outlined,
+                              color: Colors.white,
+                              size: 26,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              'Lot ที่จะถูกพักอัตโนมัติ',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFFF39C12),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Lot ต่อไปนี้ไม่ได้ถูกเลือก จะถูกพักไว้อัตโนมัติ:',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF2D3436),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      // lot cards
+                      ...splitParkInfo.map(
+                        (info) => Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF3CD),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFFFFD700).withOpacity(0.6),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.pause_circle_outline,
+                                color: Color(0xFFF39C12),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      info['lot'] as String,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF2D3436),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Group ${info['group']}: จะพัก ${info['diff']} ชิ้น (splits ไม่ครบ qty)',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'ต้องการดำเนินการต่อหรือไม่?',
+                        style: TextStyle(fontSize: 13, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: const Text('ยกเลิก'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFF39C12),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: const Text(
+                                'ตกลง พักไว้',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
     setState(() => _finishing = true);
     try {
       final res = await ApiService.finishScan(
@@ -613,6 +835,9 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       }
     }
 
+    // มี tf=2 group ไหม → ถึงจะพักอัตโนมัติ
+    final hasSplitGroup = _groups.any((g) => g.tfRsCode == 2);
+
     final Color borderColor;
     final Color bgColor;
     if (isOver) {
@@ -656,7 +881,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 : isExact && groupParkLines.isEmpty
                 ? '✅ ครบพอดี'
                 : remain > 0
-                ? '🔵 ยังเหลือ $remain ชิ้น → จะพักอัตโนมัติ'
+                ? hasSplitGroup && _groups.length == 1
+                      ? '🔵 ยังเหลือ $remain ชิ้น → จะพักอัตโนมัติ'
+                      : hasSplitGroup
+                      ? '🔵 ยังขาดอีก $remain ชิ้น → ส่วนที่เหลือจะพักอัตโนมัติใน Split Group'
+                      : '🔵 ยังขาดอีก $remain ชิ้น'
                 : '✅ ครบพอดี',
             style: TextStyle(
               fontSize: 12,
@@ -1590,175 +1819,167 @@ class _GroupCardState extends State<_GroupCard> {
             ),
             const SizedBox(height: 12),
 
-            // Qty standalone — แสดงเฉพาะ non-STA006 (STA006 ทุก tf ย้าย Qty เข้า row แล้ว)
-            if (!_isSta006) ...[
-              TextField(
-                controller: g.qtyCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Qty ของ Group นี้',
-                  border: OutlineInputBorder(),
-                  helperText: 'รวมทุก Group ต้องไม่เกิน จำนวน OK',
-                ),
-                keyboardType: TextInputType.number,
-                onChanged: (_) => widget.onChanged(),
+            // ── Qty ของ Group นี้ (ทุก tf) ──
+            TextField(
+              controller: g.qtyCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Qty ของ Group นี้',
+                border: OutlineInputBorder(),
               ),
-              const SizedBox(height: 12),
-            ],
+              onChanged: (_) => widget.onChanged(),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'รวมทุก Group ต้องไม่เกิน จำนวน OK',
+              style: TextStyle(fontSize: 11, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
 
             // From Lot (tf=1 / tf=2)
             if ((g.tfRsCode == 1 || g.tfRsCode == 2) &&
                 widget.availableLots.isNotEmpty) ...[
-              // ✅ lock ก็ต่อเมื่อ first scan (ยังไม่เคย transfer) และ lot เดียว
-              if (widget.isFirstScan && widget.availableLots.length == 1)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.shade200),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.lock_outline,
-                        size: 16,
-                        color: Colors.blue,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'From Lot (ล็อคอัตโนมัติ)',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.blue,
-                              ),
-                            ),
-                            Text(
-                              g.fromLotNo ?? widget.availableLots.first,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else
-                DropdownButtonFormField<String>(
-                  value: g.fromLotNo,
-                  decoration: const InputDecoration(
-                    labelText: 'From Lot',
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 14,
-                    ),
-                  ),
-                  isExpanded: true,
-                  // ✅ selected display = 1 บรรทัดเสมอ → กัน overflow
-                  selectedItemBuilder: (context) =>
-                      widget.availableLots.map((l) {
-                        final isCross = widget.crossTkLotMap.containsKey(l);
-                        return Align(
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            l,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: isCross ? Colors.orange.shade800 : null,
-                            ),
-                          ),
-                        );
-                      }).toList(),
-                  itemHeight:
-                      widget.crossTkLotMap.keys.any(
-                        (k) => widget.availableLots.contains(k),
-                      )
-                      ? 56.0
-                      : 48.0,
-                  items: widget.availableLots
-                      .map(
-                        (l) =>
-                            _buildLotDropdownItem(l, widget.crossTkLotMap[l]),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() {
-                    g.fromLotNo = v;
-                    widget.onChanged();
-                  }),
-                ),
-              const SizedBox(height: 12),
-            ],
-
-            // ── tf=1: [Out Part No][สี][Qty] same row (STA006) ──
-            if (g.tfRsCode == 1) ...[
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: _PartPickerField(
-                        label: 'Out Part No',
-                        value: g.outPartNo,
-                        defaultValue: g.defaultPartNo,
-                        parts: widget.availableParts,
-                        onPicked: (v) => setState(() {
-                          g.outPartNo = v;
-                          widget.onChanged();
-                        }),
-                      ),
-                    ),
-                    if (_isSta006) const SizedBox(width: 6),
-                    if (_isSta006)
-                      Expanded(
-                        child: _ColorPickerField(
-                          label: 'สี',
-                          colorId: g.colorId,
-                          colors: widget.availableColors,
-                          onChanged: (v) => setState(() {
-                            g.colorId = v;
-                            widget.onChanged();
-                          }),
-                        ),
-                      ),
-                    if (_isSta006) const SizedBox(width: 6),
-                    if (_isSta006)
-                      Expanded(
-                        child: TextField(
-                          controller: g.qtyCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Qty',
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // ── From Lot ──
+                  Expanded(
+                    flex: 3,
+                    child:
+                        widget.isFirstScan && widget.availableLots.length == 1
+                        ? Container(
+                            padding: const EdgeInsets.symmetric(
                               horizontal: 12,
-                              vertical: 14,
+                              vertical: 10,
                             ),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.shade50,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.blue.shade200),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.lock_outline,
+                                  size: 16,
+                                  color: Colors.blue,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'From Lot (ล็อคอัตโนมัติ)',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.blue,
+                                        ),
+                                      ),
+                                      Text(
+                                        g.fromLotNo ??
+                                            widget.availableLots.first,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : DropdownButtonFormField<String>(
+                            value: g.fromLotNo,
+                            decoration: const InputDecoration(
+                              labelText: 'From Lot',
+                              border: OutlineInputBorder(),
+                            ),
+                            isExpanded: true,
+                            selectedItemBuilder: (context) =>
+                                widget.availableLots.map((l) {
+                                  final isCross = widget.crossTkLotMap
+                                      .containsKey(l);
+                                  return Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      l,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: isCross
+                                            ? Colors.orange.shade800
+                                            : null,
+                                      ),
+                                    ),
+                                  );
+                                }).toList(),
+                            itemHeight:
+                                widget.crossTkLotMap.keys.any(
+                                  (k) => widget.availableLots.contains(k),
+                                )
+                                ? 56.0
+                                : 48.0,
+                            items: widget.availableLots
+                                .map(
+                                  (l) => _buildLotDropdownItem(
+                                    l,
+                                    widget.crossTkLotMap[l],
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (v) => setState(() {
+                              g.fromLotNo = v;
+                              widget.onChanged();
+                            }),
                           ),
-                          keyboardType: TextInputType.number,
-                          maxLines: null,
-                          expands: true,
-                          onChanged: (_) => widget.onChanged(),
-                        ),
-                      ),
-                  ],
-                ),
+                  ),
+                ],
               ),
               const SizedBox(height: 12),
             ],
 
-            // [FIX UX] tf=2: Splits section + color per split (STA006)
+            // ── tf=1: [Part No][สี if STA006][Qty] ──
+            if (g.tfRsCode == 1) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: _PartPickerField(
+                      label: 'Out Part No',
+                      value: g.outPartNo,
+                      defaultValue: g.defaultPartNo,
+                      parts: widget.availableParts,
+                      onPicked: (v) => setState(() {
+                        g.outPartNo = v;
+                        widget.onChanged();
+                      }),
+                    ),
+                  ),
+                  if (_isSta006) ...[
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: _ColorPickerField(
+                        label: 'สี',
+                        colorId: g.colorId,
+                        colors: widget.availableColors,
+                        onChanged: (v) => setState(() {
+                          g.colorId = v;
+                          widget.onChanged();
+                        }),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 12),
+            ],
+
+            // tf=2: Splits section
             if (g.tfRsCode == 2) ...[
               const Text(
                 'Splits:',
@@ -1813,57 +2034,35 @@ class _GroupCardState extends State<_GroupCard> {
 
             // tf=3: CO-ID
             if (g.tfRsCode == 3) ...[
-              IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: _PartPickerField(
+                      label: 'Out Part No (ผลลัพธ์รวม)',
+                      value: g.outPartNoMerge,
+                      defaultValue: g.defaultPartNo,
+                      parts: widget.availableParts,
+                      onPicked: (v) => setState(() {
+                        g.outPartNoMerge = v;
+                        widget.onChanged();
+                      }),
+                    ),
+                  ),
+                  if (_isSta006) const SizedBox(width: 6),
+                  if (_isSta006)
                     Expanded(
-                      child: _PartPickerField(
-                        label: 'Out Part No (ผลลัพธ์รวม)',
-                        value: g.outPartNoMerge,
-                        defaultValue: g.defaultPartNo,
-                        parts: widget.availableParts,
-                        onPicked: (v) => setState(() {
-                          g.outPartNoMerge = v;
+                      child: _ColorPickerField(
+                        label: 'สี',
+                        colorId: g.colorId,
+                        colors: widget.availableColors,
+                        onChanged: (v) => setState(() {
+                          g.colorId = v;
                           widget.onChanged();
                         }),
                       ),
                     ),
-                    if (_isSta006) const SizedBox(width: 6),
-                    if (_isSta006)
-                      Expanded(
-                        child: _ColorPickerField(
-                          label: 'สี',
-                          colorId: g.colorId,
-                          colors: widget.availableColors,
-                          onChanged: (v) => setState(() {
-                            g.colorId = v;
-                            widget.onChanged();
-                          }),
-                        ),
-                      ),
-                    if (_isSta006) const SizedBox(width: 6),
-                    if (_isSta006)
-                      Expanded(
-                        child: TextField(
-                          controller: g.qtyCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Qty',
-                            border: OutlineInputBorder(),
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 14,
-                            ),
-                          ),
-                          keyboardType: TextInputType.number,
-                          maxLines: null,
-                          expands: true,
-                          onChanged: (_) => widget.onChanged(),
-                        ),
-                      ),
-                  ],
-                ),
+                ],
               ),
               const SizedBox(height: 12),
               const Text(
@@ -1922,9 +2121,16 @@ class _GroupCardState extends State<_GroupCard> {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// ✅ Part Picker Field (tap → bottom sheet search)
+// ✅ Shared height constant — ALL three field types use this
 // ══════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// ✅ Shared height — all three field types use this ONE value
+// ══════════════════════════════════════════════════════════════════
+const double _kFieldH = 48.0;
 
+// ══════════════════════════════════════════════════════════════════
+// ✅ _PartPickerField — outlined label floats top-left, fixed height
+// ══════════════════════════════════════════════════════════════════
 class _PartPickerField extends StatelessWidget {
   final String label;
   final String? value;
@@ -1940,24 +2146,25 @@ class _PartPickerField extends StatelessWidget {
     required this.onPicked,
   });
 
-  // ✅ โชว์แค่ part_no สั้นๆ ไม่เอา lot number ปน
   String _displayText() {
     final v = value ?? defaultValue ?? '';
-    if (v.isEmpty) return 'เลือก Part No';
-    // ถ้าค่าเป็น lot_no (ขึ้น 6 หลัก) ให้โชว์ placeholder
-    if (RegExp(r'^\d{6}-').hasMatch(v)) return 'เลือก Part No';
+    if (v.isEmpty) return '';
+    if (RegExp(r'^\d{6}-').hasMatch(v)) return '';
     final part = parts.firstWhere(
       (p) => p['part_no']?.toString() == v,
       orElse: () => {},
     );
     final pName = part['part_name']?.toString() ?? '';
-    // โชว์: "322-K26 • Caliper RR K26"  ไม่เอา lot number
     return pName.isNotEmpty ? '$v  •  $pName' : v;
   }
 
   @override
   Widget build(BuildContext context) {
     final effective = value ?? defaultValue;
+    final isEmpty =
+        effective == null ||
+        effective.isEmpty ||
+        RegExp(r'^\d{6}-').hasMatch(effective);
     return InkWell(
       onTap: () => showModalBottomSheet(
         context: context,
@@ -1971,6 +2178,7 @@ class _PartPickerField extends StatelessWidget {
         ),
       ),
       child: InputDecorator(
+        isEmpty: isEmpty,
         decoration: InputDecoration(
           labelText: label,
           border: const OutlineInputBorder(),
@@ -1979,15 +2187,14 @@ class _PartPickerField extends StatelessWidget {
             horizontal: 12,
             vertical: 14,
           ),
-          suffixIcon: const Icon(Icons.search),
+          suffixIcon: const Icon(Icons.search_rounded, size: 18),
+          constraints: const BoxConstraints.tightFor(height: _kFieldH),
         ),
         child: Text(
           _displayText(),
-          style: TextStyle(
-            fontSize: 14,
-            color: effective != null ? Colors.black87 : Colors.grey,
-          ),
+          maxLines: 1,
           overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 13, color: Colors.black87),
         ),
       ),
     );
@@ -1995,9 +2202,127 @@ class _PartPickerField extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// ✅ Part Search Bottom Sheet
+// ✅ safe int parser
 // ══════════════════════════════════════════════════════════════════
+int? _safeInt(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is double) return v.toInt();
+  return int.tryParse(v.toString());
+}
 
+// ══════════════════════════════════════════════════════════════════
+// ✅ _ColorPickerField — outlined label floats top-left, same height
+// ══════════════════════════════════════════════════════════════════
+class _ColorPickerField extends StatelessWidget {
+  final String label;
+  final int? colorId;
+  final List<Map<String, dynamic>> colors;
+  final ValueChanged<int?> onChanged;
+
+  const _ColorPickerField({
+    required this.label,
+    required this.colorId,
+    required this.colors,
+    required this.onChanged,
+  });
+
+  String _displayText() {
+    if (colorId == null) return 'กรุณาเลือกสีที่ต้องการ';
+    final c = colors.firstWhere(
+      (c) => _safeInt(c['color_id']) == colorId,
+      orElse: () => {},
+    );
+    if (c.isEmpty) return 'กรุณาเลือกสีที่ต้องการ';
+    final no = c['color_no']?.toString() ?? '';
+    final name = c['color_name']?.toString() ?? '';
+    return name.isNotEmpty ? '$no  •  $name' : no;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: () => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _ColorSearchSheet(
+          label: label,
+          colors: colors,
+          currentColorId: colorId,
+          onPicked: onChanged,
+        ),
+      ),
+      child: InputDecorator(
+        isEmpty: false,
+        decoration: InputDecoration(
+          labelText: '🎨 $label',
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          border: const OutlineInputBorder(),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 14,
+          ),
+          suffixIcon: const Icon(Icons.palette_outlined, size: 18),
+          constraints: const BoxConstraints.tightFor(height: _kFieldH),
+        ),
+        child: Text(
+          _displayText(),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 13,
+            color: colorId == null ? Colors.grey.shade500 : Colors.black87,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ✅ _QtyField — TextField with same outlined style + same height
+// ══════════════════════════════════════════════════════════════════
+class _QtyField extends StatelessWidget {
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final String label;
+
+  const _QtyField({
+    required this.controller,
+    required this.onChanged,
+    this.label = 'Qty',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        border: const OutlineInputBorder(),
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 14,
+        ),
+        constraints: const BoxConstraints.tightFor(height: _kFieldH),
+      ),
+      child: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        style: const TextStyle(fontSize: 13),
+        decoration: const InputDecoration.collapsed(hintText: ''),
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Part Search Bottom Sheet
+// ══════════════════════════════════════════════════════════════════
 class _PartSearchSheet extends StatefulWidget {
   final String label;
   final List<Map<String, dynamic>> parts;
@@ -2058,7 +2383,6 @@ class _PartSearchSheetState extends State<_PartSearchSheet> {
         ),
         child: Column(
           children: [
-            // handle
             Container(
               margin: const EdgeInsets.only(top: 8, bottom: 4),
               width: 40,
@@ -2152,9 +2476,8 @@ class _PartSearchSheetState extends State<_PartSearchSheet> {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Split Row (พร้อม search + default part + STA006 color picker)
+// Split Row
 // ══════════════════════════════════════════════════════════════════
-
 class _SplitRow extends StatelessWidget {
   final int index;
   final _SplitEntry entry;
@@ -2182,8 +2505,8 @@ class _SplitRow extends StatelessWidget {
 
   String _partDisplay() {
     final v = entry.partNo ?? defaultPartNo ?? '';
-    if (v.isEmpty) return 'เลือก Part No';
-    if (RegExp(r'^\d{6}-').hasMatch(v)) return 'เลือก Part No';
+    if (v.isEmpty) return '';
+    if (RegExp(r'^\d{6}-').hasMatch(v)) return '';
     final part = availableParts.firstWhere(
       (p) => p['part_no']?.toString() == v,
       orElse: () => {},
@@ -2195,80 +2518,77 @@ class _SplitRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final effective = entry.partNo ?? defaultPartNo;
+    final isEmpty =
+        effective == null ||
+        effective.isEmpty ||
+        RegExp(r'^\d{6}-').hasMatch(effective);
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(
-              width: 24,
-              child: Center(
-                child: Text(
-                  '${index + 1}.',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey,
-                  ),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 24,
+            height: _kFieldH,
+            child: Center(
+              child: Text(
+                '${index + 1}.',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
                 ),
               ),
             ),
-            Expanded(
-              child: InkWell(
-                onTap: onTapPartSearch,
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Part No',
-                    border: OutlineInputBorder(),
-                    isDense: true,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 14,
-                    ),
-                    suffixIcon: Icon(Icons.search, size: 18),
-                  ),
-                  child: Text(
-                    _partDisplay(),
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: effective != null ? Colors.black87 : Colors.grey,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-            ),
-            if (isSta006) const SizedBox(width: 6),
-            if (isSta006)
-              Expanded(
-                child: _ColorPickerField(
-                  label: 'สี',
-                  colorId: entry.colorId,
-                  colors: availableColors,
-                  onChanged: onColorChanged,
-                ),
-              ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: TextField(
-                controller: entry.qtyCtrl,
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: InkWell(
+              onTap: onTapPartSearch,
+              child: InputDecorator(
+                isEmpty: isEmpty,
                 decoration: const InputDecoration(
-                  labelText: 'Qty',
+                  labelText: 'Part No',
                   border: OutlineInputBorder(),
                   isDense: true,
                   contentPadding: EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 14,
                   ),
+                  suffixIcon: Icon(Icons.search_rounded, size: 18),
+                  constraints: BoxConstraints.tightFor(height: _kFieldH),
                 ),
-                keyboardType: TextInputType.number,
-                maxLines: null,
-                expands: true,
-                onChanged: (_) => onChanged(),
+                child: Text(
+                  _partDisplay(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 13, color: Colors.black87),
+                ),
               ),
             ),
-            if (onRemove != null)
-              IconButton(
+          ),
+          if (isSta006) ...[
+            const SizedBox(width: 6),
+            Expanded(
+              child: _ColorPickerField(
+                label: 'สี',
+                colorId: entry.colorId,
+                colors: availableColors,
+                onChanged: onColorChanged,
+              ),
+            ),
+          ],
+          const SizedBox(width: 6),
+          Expanded(
+            child: _QtyField(
+              controller: entry.qtyCtrl,
+              onChanged: (_) => onChanged(),
+            ),
+          ),
+          if (onRemove != null)
+            SizedBox(
+              height: _kFieldH,
+              child: IconButton(
                 icon: const Icon(
                   Icons.remove_circle_outline,
                   color: Colors.red,
@@ -2278,93 +2598,16 @@ class _SplitRow extends StatelessWidget {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 32),
               ),
-          ],
-        ),
+            ),
+        ],
       ),
     );
   }
-}
-
-// ✅ safe int parser — รองรับ JSON ที่อาจส่ง number เป็น int หรือ double
-int? _safeInt(dynamic v) {
-  if (v == null) return null;
-  if (v is int) return v;
-  if (v is double) return v.toInt();
-  return int.tryParse(v.toString());
 }
 
 // ══════════════════════════════════════════════════════════════════
-// ✅ Color Picker Field — STA006 only (Bottom Sheet style like _PartPickerField)
+// Color Search Bottom Sheet
 // ══════════════════════════════════════════════════════════════════
-
-class _ColorPickerField extends StatelessWidget {
-  final String label;
-  final int? colorId;
-  final List<Map<String, dynamic>> colors;
-  final ValueChanged<int?> onChanged;
-
-  const _ColorPickerField({
-    required this.label,
-    required this.colorId,
-    required this.colors,
-    required this.onChanged,
-  });
-
-  String _displayText() {
-    if (colorId == null) return 'เลือกสี';
-    final c = colors.firstWhere(
-      // ✅ safe compare — JSON อาจส่ง color_id เป็น int หรือ double
-      (c) => _safeInt(c['color_id']) == colorId,
-      orElse: () => {},
-    );
-    if (c.isEmpty) return 'เลือกสี';
-    final no = c['color_no']?.toString() ?? '';
-    final name = c['color_name']?.toString() ?? '';
-    return name.isNotEmpty ? '$no  •  $name' : no;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: () => showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _ColorSearchSheet(
-          label: label,
-          colors: colors,
-          currentColorId: colorId,
-          onPicked: onChanged,
-        ),
-      ),
-      child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: '🎨 $label',
-          border: const OutlineInputBorder(),
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 14,
-          ),
-          suffixIcon: const Icon(Icons.palette_outlined, size: 20),
-        ),
-        child: Text(
-          _displayText(),
-          style: TextStyle(
-            fontSize: 14,
-            color: colorId != null ? Colors.black87 : Colors.grey,
-          ),
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    );
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────
-// ✅ Color Search Bottom Sheet
-// ──────────────────────────────────────────────────────────────────
-
 class _ColorSearchSheet extends StatefulWidget {
   final String label;
   final List<Map<String, dynamic>> colors;
@@ -2389,7 +2632,6 @@ class _ColorSearchSheetState extends State<_ColorSearchSheet> {
   @override
   void initState() {
     super.initState();
-    // กรองเฉพาะ active colors (color_status = 1)
     final active = widget.colors.where((c) {
       final s = c['color_status'];
       if (s == null) return true;
@@ -2430,7 +2672,6 @@ class _ColorSearchSheetState extends State<_ColorSearchSheet> {
         ),
         child: Column(
           children: [
-            // handle bar
             Container(
               margin: const EdgeInsets.only(top: 8, bottom: 4),
               width: 40,
@@ -2479,7 +2720,6 @@ class _ColorSearchSheetState extends State<_ColorSearchSheet> {
                       separatorBuilder: (_, __) => const Divider(height: 1),
                       itemBuilder: (_, i) {
                         final c = _filtered[i];
-                        // ✅ safe parse — JSON อาจส่ง color_id เป็น int หรือ double
                         final cId = _safeInt(c['color_id']) ?? 0;
                         final cNo = c['color_no']?.toString() ?? '';
                         final cName = c['color_name']?.toString() ?? '';
@@ -2528,12 +2768,11 @@ class _ColorSearchSheetState extends State<_ColorSearchSheet> {
 // ══════════════════════════════════════════════════════════════════
 // Merge Lot Row
 // ══════════════════════════════════════════════════════════════════
-
 class _MergeLotRow extends StatelessWidget {
   final int index;
   final _MergeLotEntry entry;
   final List<String> availableLots;
-  final Map<String, String> crossTkLotMap; // ✅ lot_no → source_tk_id
+  final Map<String, String> crossTkLotMap;
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
 
@@ -2562,7 +2801,7 @@ class _MergeLotRow extends StatelessWidget {
           ),
         ),
         Expanded(
-          flex: 3,
+          flex: 2,
           child: DropdownButtonFormField<String>(
             value: entry.fromLotNo,
             isExpanded: true,
@@ -2576,7 +2815,6 @@ class _MergeLotRow extends StatelessWidget {
                 vertical: 10,
               ),
             ),
-            // ✅ selected display = 1 บรรทัดเสมอ → กัน overflow ในช่อง
             selectedItemBuilder: (context) => availableLots.map((l) {
               final isCross = crossTkLotMap.containsKey(l);
               return Align(
@@ -2591,7 +2829,6 @@ class _MergeLotRow extends StatelessWidget {
                 ),
               );
             }).toList(),
-            // menu items ยังโชว์ 2 บรรทัด (label + lot_no)
             itemHeight: crossTkLotMap.keys.any((k) => availableLots.contains(k))
                 ? 56.0
                 : 48.0,
@@ -2645,13 +2882,17 @@ class _MergeLotRow extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Expanded(
-          flex: 2,
+          flex: 1,
           child: TextField(
             controller: entry.qtyCtrl,
             decoration: const InputDecoration(
               labelText: 'Qty',
               border: OutlineInputBorder(),
               isDense: true,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
             ),
             keyboardType: TextInputType.number,
             onChanged: (_) => onChanged(),
@@ -2674,7 +2915,6 @@ class _MergeLotRow extends StatelessWidget {
 // ══════════════════════════════════════════════════════════════════
 // Info Card
 // ══════════════════════════════════════════════════════════════════
-
 class _InfoCard extends StatelessWidget {
   final String tkId;
   final Map<String, dynamic> tkDoc;
@@ -2762,7 +3002,6 @@ class _InfoCard extends StatelessWidget {
             Text('Part No: ${partNo.isEmpty ? '-' : partNo}'),
             Text('Part Name: ${partName.isEmpty ? '-' : partName}'),
             Text('Lot No: ${lotHeader.isEmpty ? '-' : lotHeader}'),
-            const SizedBox(height: 4),
             Text('Station: $staId ($staName)'),
             Text('Machine: $mcId ($mcName)'),
             if (currentLots.isNotEmpty) ...[
