@@ -1212,52 +1212,94 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                         ],
                       ),
                       const SizedBox(height: 8),
-                      // own-TK parked lots
-                      ..._parkedLots.map(
-                        (pl) => _ParkedLotTile(
-                          lotNo: pl['parked_lot_no']?.toString() ?? '',
-                          qty: pl['parked_qty']?.toString() ?? '-',
-                          reason: pl['parked_reason']?.toString() ?? '',
-                          tkId: pl['from_tk_id']?.toString() ?? '-',
-                          sta: pl['op_sta_id']?.toString() ?? '-',
-                          staName: pl['op_sta_name']?.toString() ?? '',
-                          isCrossTk: false,
-                        ),
-                      ),
-                      // cross-TK parked lots
-                      if (_crossTkParkedLots.isNotEmpty) ...[
-                        const Divider(height: 12),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.swap_horiz,
-                              color: Colors.orange.shade700,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Lot จาก TK อื่น (สามารถหยิบมาใช้ได้)',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.orange.shade700,
+                      // scroll when total > 3
+                      Builder(
+                        builder: (context) {
+                          final allTiles = [
+                            ..._parkedLots.map(
+                              (pl) => _ParkedLotTile(
+                                lotNo: pl['parked_lot_no']?.toString() ?? '',
+                                qty: pl['parked_qty']?.toString() ?? '-',
+                                reason: pl['parked_reason']?.toString() ?? '',
+                                tkId: pl['from_tk_id']?.toString() ?? '-',
+                                sta: pl['op_sta_id']?.toString() ?? '-',
+                                staName: pl['op_sta_name']?.toString() ?? '',
+                                isCrossTk: false,
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        ..._crossTkParkedLots.map(
-                          (pl) => _ParkedLotTile(
-                            lotNo: pl['parked_lot_no']?.toString() ?? '',
-                            qty: pl['parked_qty']?.toString() ?? '-',
-                            reason: pl['parked_reason']?.toString() ?? '',
-                            tkId: pl['from_tk_id']?.toString() ?? '-',
-                            sta: pl['op_sta_id']?.toString() ?? '-',
-                            staName: pl['op_sta_name']?.toString() ?? '',
-                            isCrossTk: true,
-                          ),
-                        ),
-                      ],
+                          ];
+                          final hasCross = _crossTkParkedLots.isNotEmpty;
+                          final crossTiles = hasCross
+                              ? _crossTkParkedLots
+                                    .map(
+                                      (pl) => _ParkedLotTile(
+                                        lotNo:
+                                            pl['parked_lot_no']?.toString() ??
+                                            '',
+                                        qty:
+                                            pl['parked_qty']?.toString() ?? '-',
+                                        reason:
+                                            pl['parked_reason']?.toString() ??
+                                            '',
+                                        tkId:
+                                            pl['from_tk_id']?.toString() ?? '-',
+                                        sta: pl['op_sta_id']?.toString() ?? '-',
+                                        staName:
+                                            pl['op_sta_name']?.toString() ?? '',
+                                        isCrossTk: true,
+                                      ),
+                                    )
+                                    .toList()
+                              : <Widget>[];
+
+                          final totalCount =
+                              allTiles.length + crossTiles.length;
+                          final needsScroll = totalCount > 3;
+
+                          Widget buildContent() => Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              ...allTiles,
+                              if (hasCross) ...[
+                                const Divider(height: 12),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.swap_horiz,
+                                      color: Colors.orange.shade700,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'Lot จาก TK อื่น (สามารถหยิบมาใช้ได้)',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Colors.orange.shade700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                ...crossTiles,
+                              ],
+                            ],
+                          );
+
+                          return needsScroll
+                              ? SizedBox(
+                                  height: 260,
+                                  child: Scrollbar(
+                                    thumbVisibility: true,
+                                    child: SingleChildScrollView(
+                                      child: buildContent(),
+                                    ),
+                                  ),
+                                )
+                              : buildContent();
+                        },
+                      ),
                       const SizedBox(height: 4),
                       const Text(
                         '💡 Lot ที่พักไว้สามารถเลือกใน From Lot ได้',

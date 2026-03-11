@@ -183,7 +183,7 @@ class _SummaryPageState extends State<SummaryPage> {
                   ),
                   _kv('Type', _tfLabel(scan['tf_rs_code'])),
                   _kv(
-                    'Good / Scrap',
+                    'OK / NG',
                     '${scan['op_sc_good_qty'] ?? 0} / ${scan['op_sc_scrap_qty'] ?? 0}',
                   ),
                   _kv('Lot No', scan['lot_no']?.toString() ?? '-'),
@@ -498,7 +498,7 @@ class _SummaryPageState extends State<SummaryPage> {
                                     ),
                                   ),
                                   subtitle: Text(
-                                    'SC: $opScId\nMC: $mc | Good: $good | Scrap: $scrap | $type',
+                                    'SC: $opScId\nMC: $mc | OK: $good | NG: $scrap | $type',
                                   ),
                                   isThreeLine: true,
                                   trailing: const Icon(Icons.chevron_right),

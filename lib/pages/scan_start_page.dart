@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter/material.dart';
 import '../config/api_service.dart';
 import '../widgets/cooler_alert.dart';
@@ -101,6 +102,17 @@ class _ScanStartPageState extends State<ScanStartPage> {
       );
     } finally {
       if (mounted) setState(() => _loadingTk = false);
+    }
+  }
+
+  Future<void> _openQrScanner() async {
+    final result = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const _QrScannerPage()),
+    );
+    if (result != null && result.isNotEmpty) {
+      _tkCtrl.text = result;
+      _lookupTk();
     }
   }
 
@@ -255,10 +267,19 @@ class _ScanStartPageState extends State<ScanStartPage> {
                         Expanded(
                           child: TextField(
                             controller: _tkCtrl,
-                            decoration: const InputDecoration(
+                            decoration: InputDecoration(
                               hintText: 'กรุณากรอก Tracking No.',
-                              prefixIcon: Icon(Icons.qr_code),
-                              border: OutlineInputBorder(),
+                              prefixIcon: GestureDetector(
+                                onTap: _openQrScanner,
+                                child: const Tooltip(
+                                  message: 'สแกน QR Code',
+                                  child: Icon(
+                                    Icons.qr_code,
+                                    color: Colors.green,
+                                  ),
+                                ),
+                              ),
+                              border: const OutlineInputBorder(),
                             ),
                             textCapitalization: TextCapitalization.characters,
                             onSubmitted: (_) => _lookupTk(),
@@ -487,4 +508,93 @@ class _Row extends StatelessWidget {
       ],
     ),
   );
+}
+
+// ══════════════════════════════════════════════════════════════════
+// QR Scanner Page (mobile_scanner)
+// ══════════════════════════════════════════════════════════════════
+class _QrScannerPage extends StatefulWidget {
+  const _QrScannerPage();
+
+  @override
+  State<_QrScannerPage> createState() => _QrScannerPageState();
+}
+
+class _QrScannerPageState extends State<_QrScannerPage> {
+  final MobileScannerController _ctrl = MobileScannerController(
+    detectionSpeed: DetectionSpeed.noDuplicates,
+  );
+  bool _hasResult = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_hasResult) return;
+    final code = capture.barcodes.firstOrNull?.rawValue;
+    if (code == null || code.isEmpty) return;
+    _hasResult = true;
+    Navigator.pop(context, code);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: const Text('Scan TK QR'),
+        actions: [
+          IconButton(
+            tooltip: 'สลับกล้อง',
+            icon: const Icon(Icons.flip_camera_ios_rounded),
+            onPressed: _ctrl.switchCamera,
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          MobileScanner(controller: _ctrl, onDetect: _onDetect),
+          // Overlay frame
+          Center(
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.greenAccent, width: 3),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+          // Hint text
+          Align(
+            alignment: const Alignment(0, 0.75),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'Align the QR code inside the box',
+                style: TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+          ),
+          // ( สแกน QR Code )
+          Align(
+            alignment: const Alignment(0, 0.92),
+            child: const Text(
+              '( สแกน QR Code )',
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
