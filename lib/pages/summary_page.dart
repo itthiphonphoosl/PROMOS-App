@@ -643,25 +643,6 @@ class _SummaryPageState extends State<SummaryPage> {
                                   fontSize: 13,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade200,
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Text(
-                                  '${lotsAll.length}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.black87,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
                             ],
                           ),
                           const SizedBox(height: 8),
