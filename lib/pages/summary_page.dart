@@ -133,19 +133,38 @@ class _SummaryPageState extends State<SummaryPage> {
 
   /// รวม lot ทั้งหมดจาก current + transfers (เอาไว้โชว์ "Lots ทั้งหมด" ถ้าต้องการ)
   List<String> _allLotsFromPayload() {
-    final set = <String>{};
-    final curLot = _data?['current']?['lot_no']?.toString();
-    if (curLot != null && curLot.trim().isNotEmpty) set.add(curLot.trim());
+    final transfers = _transfers();
 
-    for (final tr in _transfers()) {
-      final a = tr['from_lot_no']?.toString() ?? '';
-      final b = tr['to_lot_no']?.toString() ?? '';
-      if (a.trim().isNotEmpty) set.add(a.trim());
-      if (b.trim().isNotEmpty) set.add(b.trim());
+    // track first-seen transfer_ts for each lot (as to_lot_no = when it was born)
+    final firstSeenTs = <String, String>{};
+    for (final t in transfers) {
+      final ts = t['transfer_ts']?.toString() ?? '';
+      final tl = (t['to_lot_no']?.toString() ?? '').trim();
+      if (tl.isNotEmpty && ts.isNotEmpty) {
+        if (!firstSeenTs.containsKey(tl)) firstSeenTs[tl] = ts;
+      }
     }
-    final list = set.toList();
-    list.sort();
-    return list;
+
+    // also include from_lot_no that never appear as to_lot (original lot from TKDoc)
+    final originalLot =
+        (_data?['tk']?['lot_no']?.toString() ??
+                _data?['current']?['lot_no']?.toString() ??
+                '')
+            .trim();
+    if (originalLot.isNotEmpty && !firstSeenTs.containsKey(originalLot)) {
+      firstSeenTs[originalLot] = '';
+    }
+
+    final lots = firstSeenTs.keys.toList();
+    lots.sort((a, b) {
+      final ta = firstSeenTs[a] ?? '';
+      final tb = firstSeenTs[b] ?? '';
+      if (ta.isEmpty && tb.isEmpty) return a.compareTo(b);
+      if (ta.isEmpty) return -1; // original lot (no ts) goes first
+      if (tb.isEmpty) return 1;
+      return ta.compareTo(tb);
+    });
+    return lots;
   }
 
   void _openScanDetail(Map<String, dynamic> scan) {

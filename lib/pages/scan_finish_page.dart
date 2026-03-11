@@ -141,18 +141,27 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         final transfers = (body['transfers'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        final fromSet = <String>{};
-        final activeToSet = <String>{};
+        String? latestTs;
         for (final t in transfers) {
-          final fl = (t['from_lot_no']?.toString() ?? '').trim();
+          final ts = t['transfer_ts']?.toString() ?? '';
+          if (ts.isNotEmpty &&
+              (latestTs == null || ts.compareTo(latestTs!) > 0)) {
+            latestTs = ts;
+          }
+        }
+        final latestBatch = latestTs == null
+            ? transfers
+            : transfers
+                  .where((t) => t['transfer_ts']?.toString() == latestTs)
+                  .toList();
+        final activeToSet = <String>{};
+        for (final t in latestBatch) {
           final tl = (t['to_lot_no']?.toString() ?? '').trim();
           final isParked = _toInt01(t['lot_parked_status']) == 1;
-          if (fl.isNotEmpty) fromSet.add(fl);
           if (tl.isNotEmpty && !isParked) activeToSet.add(tl);
         }
-        final leaf =
-            activeToSet.difference(fromSet).where((x) => x.isNotEmpty).toList()
-              ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+        final leaf = activeToSet.where((x) => x.isNotEmpty).toList()
+          ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
 
         // 4) parked lots — กรองเฉพาะ lot ที่พักใน station ของ operator ปัจจุบัน
         final currentStaId = _staId?.trim() ?? '';
@@ -425,69 +434,176 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       final confirmed = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.inventory_2_outlined, color: Colors.orange),
-              SizedBox(width: 8),
-              Text('Lot ที่จะถูกพักอัตโนมัติ'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Lot ต่อไปนี้ไม่ได้ถูกเลือก จะถูกพักไว้อัตโนมัติ:',
-                style: TextStyle(fontSize: 13),
+        builder: (ctx) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 480),
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E7),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: const Color(0xFFE67E22).withOpacity(0.5),
+                width: 1.5,
               ),
-              const SizedBox(height: 10),
-              ...willBeParked.map(
-                (l) => Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFF39C12).withOpacity(0.2),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFF39C12),
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(20),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 16, 20),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(
-                        Icons.pause_circle_outline,
-                        color: Colors.orange,
-                        size: 16,
+                      Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF39C12),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(
+                                    0xFFF39C12,
+                                  ).withOpacity(0.35),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.inventory_2_outlined,
+                              color: Colors.white,
+                              size: 26,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Text(
+                              'Lot ที่จะถูกพักอัตโนมัติ',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFFF39C12),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          l,
-                          style: const TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Lot ต่อไปนี้ไม่ได้ถูกเลือก จะถูกพักไว้อัตโนมัติ:',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF2D3436),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      ...willBeParked.map(
+                        (l) => Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFF3CD),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFFFFD700).withOpacity(0.6),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.pause_circle_outline,
+                                color: Color(0xFFF39C12),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  l,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF2D3436),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'ต้องการดำเนินการต่อหรือไม่?',
+                        style: TextStyle(fontSize: 13, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: const Text('ยกเลิก'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFF39C12),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: const Text(
+                                'ตกลง พักไว้',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'ต้องการดำเนินการต่อหรือไม่?',
-                style: TextStyle(fontSize: 13, color: Colors.grey),
-              ),
-            ],
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('ยกเลิก'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text(
-                'ตกลง พักไว้',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
         ),
       );
 
@@ -768,12 +884,13 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           groupLines,
           if (autoParkedCount > 0)
             '🔵 Auto-พัก $autoParkedCount lot (ไม่ได้ใช้งาน)',
-          if (isFinished) '✅ ปิดเอกสารแล้ว',
         ].join('\n');
 
         CoolerAlert.show(
           context,
-          title: 'Finish สำเร็จ!',
+          title: isFinished
+              ? 'Finish Station สุดท้ายสำเร็จ!'
+              : 'Finish สำเร็จ!',
           message: msgLines,
           type: CoolerAlertType.success,
           duration: const Duration(seconds: 4),
@@ -1365,6 +1482,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 staId: _staId, // ✅ STA006 check
                 isFirstScan: _isFirstScan,
                 crossTkLotMap: _crossTkLotMap,
+                totalGroups: _groups.length,
                 onChanged: () => setState(() {}),
                 onRemove: () => _removeGroup(i),
               );
@@ -1641,6 +1759,7 @@ class _GroupCard extends StatefulWidget {
   final String? staId; // ✅ ใช้ตรวจว่าเป็น STA006 หรือไม่
   final bool isFirstScan;
   final Map<String, String> crossTkLotMap;
+  final int totalGroups;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
 
@@ -1657,6 +1776,7 @@ class _GroupCard extends StatefulWidget {
     required this.staId,
     required this.isFirstScan,
     required this.crossTkLotMap,
+    required this.totalGroups,
     required this.onChanged,
     required this.onRemove,
   });
@@ -1823,10 +1943,11 @@ class _GroupCardState extends State<_GroupCard> {
                   ),
                 ),
                 const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.red),
-                  onPressed: widget.onRemove,
-                ),
+                if (widget.totalGroups > 1)
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.red),
+                    onPressed: widget.onRemove,
+                  ),
               ],
             ),
             const SizedBox(height: 12),
