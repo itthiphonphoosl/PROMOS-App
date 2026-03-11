@@ -57,7 +57,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     });
   }
 
-  String get _name => _user?['u_name'] ?? '-';
+  String get _name =>
+      (('${_user?["u_firstname"] ?? ""} ${_user?["u_lastname"] ?? ""}'.trim())
+          .isNotEmpty)
+      ? '${_user?["u_firstname"] ?? ""} ${_user?["u_lastname"] ?? ""}'.trim()
+      : '-';
   String get _role => _user?['role'] ?? '-';
   String get _uType => _user?['u_type'] ?? '-';
   String get _staId => _user?['op_sta_id'] ?? '';
@@ -70,6 +74,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return 'Operator';
       case 'ad':
         return 'Admin';
+      case 'ma':
+        return 'Manager';
       default:
         return _role;
     }

@@ -187,8 +187,8 @@ class _SummaryPageState extends State<SummaryPage> {
                     '${scan['op_sc_good_qty'] ?? 0} / ${scan['op_sc_scrap_qty'] ?? 0}',
                   ),
                   _kv('Lot No', scan['lot_no']?.toString() ?? '-'),
-                  _kv('Start', scan['op_sc_ts']?.toString() ?? '-'),
-                  _kv('Finish', scan['op_sc_finish_ts']?.toString() ?? '-'),
+                  _kv('Start', _fmtTs(scan['op_sc_ts']?.toString())),
+                  _kv('Finish', _fmtTs(scan['op_sc_finish_ts']?.toString())),
 
                   const SizedBox(height: 16),
                   const Divider(),
@@ -211,7 +211,7 @@ class _SummaryPageState extends State<SummaryPage> {
                       final fromLot = t['from_lot_no']?.toString() ?? '-';
                       final toLot = t['to_lot_no']?.toString() ?? '-';
                       final qty = t['transfer_qty']?.toString() ?? '0';
-                      final ts = t['transfer_ts']?.toString() ?? '-';
+                      final ts = _fmtTs(t['transfer_ts']?.toString());
                       final fromTk = t['from_tk_id']?.toString() ?? '';
                       final toTk = t['to_tk_id']?.toString() ?? '';
 
@@ -383,6 +383,19 @@ class _SummaryPageState extends State<SummaryPage> {
       ],
     ),
   );
+
+  String _fmtTs(String? iso) {
+    if (iso == null || iso == '-') return '-';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return '${dt.day}/${dt.month}/${dt.year} '
+          '${dt.hour.toString().padLeft(2, '0')}:'
+          '${dt.minute.toString().padLeft(2, '0')}:'
+          '${dt.second.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return iso;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -614,31 +627,122 @@ class _SummaryPageState extends State<SummaryPage> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Lots ทั้งหมด (จาก summary payload)',
-                            style: TextStyle(fontWeight: FontWeight.bold),
+                          Row(
+                            children: [
+                              Text(
+                                'ประวัติ Lots ทั้งหมดใน ${widget.tkId}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade200,
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  '${lotsAll.length}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.black87,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           if (lotsAll.isEmpty)
                             const Text(
                               'ยังไม่มี Lot',
-                              style: TextStyle(color: Colors.grey),
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 12,
+                              ),
                             )
                           else
-                            ...lotsAll.map(
-                              (l) => Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
-                                child: Text(
-                                  l,
-                                  style: const TextStyle(fontSize: 12),
-                                  overflow: TextOverflow.ellipsis,
+                            ...lotsAll.asMap().entries.map((e) {
+                              final idx = e.key;
+                              final lot = e.value;
+                              final isLatest = idx == lotsAll.length - 1;
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: 22,
+                                      child: Text(
+                                        '${idx + 1}.',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: isLatest
+                                              ? Colors.blue.shade700
+                                              : Colors.grey,
+                                          fontWeight: isLatest
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        lot,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: isLatest
+                                              ? Colors.blue.shade700
+                                              : Colors.black54,
+                                          fontWeight: isLatest
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        ),
+                                      ),
+                                    ),
+                                    if (isLatest)
+                                      Container(
+                                        margin: const EdgeInsets.only(
+                                          left: 6,
+                                          top: 1,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 1,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blue.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.blue.shade200,
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'ล่าสุด',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.blue,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
-                              ),
-                            ),
+                              );
+                            }),
                         ],
                       ),
                     ),
