@@ -87,11 +87,26 @@ class _ScanStartPageState extends State<ScanStartPage> {
 
       if (res.statusCode == 200) {
         setState(() => _tkDoc = body);
-      } else {
+      } else if (res.statusCode == 404) {
         CoolerAlert.show(
           context,
           message: body['message']?.toString() ?? 'ไม่พบ Tracking No. นี้',
           type: CoolerAlertType.warning,
+        );
+      } else if (res.statusCode == 403) {
+        CoolerAlert.show(
+          context,
+          title: 'เอกสารถูกปิดการใช้งาน',
+          message:
+              body['message']?.toString() ??
+              'เอกสารนี้ถูกปิดการใช้งาน กรุณาติดต่อ Admin',
+          type: CoolerAlertType.error,
+        );
+      } else {
+        CoolerAlert.show(
+          context,
+          message: body['message']?.toString() ?? 'เกิดข้อผิดพลาด กรุณาลองใหม่',
+          type: CoolerAlertType.error,
         );
       }
     } catch (_) {

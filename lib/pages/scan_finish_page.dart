@@ -1365,6 +1365,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 staId: _staId, // ✅ STA006 check
                 isFirstScan: _isFirstScan,
                 crossTkLotMap: _crossTkLotMap,
+                totalGroups: _groups.length,
                 onChanged: () => setState(() {}),
                 onRemove: () => _removeGroup(i),
               );
@@ -1641,6 +1642,7 @@ class _GroupCard extends StatefulWidget {
   final String? staId; // ✅ ใช้ตรวจว่าเป็น STA006 หรือไม่
   final bool isFirstScan;
   final Map<String, String> crossTkLotMap;
+  final int totalGroups;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
 
@@ -1657,6 +1659,7 @@ class _GroupCard extends StatefulWidget {
     required this.staId,
     required this.isFirstScan,
     required this.crossTkLotMap,
+    required this.totalGroups,
     required this.onChanged,
     required this.onRemove,
   });
@@ -1823,10 +1826,11 @@ class _GroupCardState extends State<_GroupCard> {
                   ),
                 ),
                 const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close, color: Colors.red),
-                  onPressed: widget.onRemove,
-                ),
+                if (widget.totalGroups > 1)
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.red),
+                    onPressed: widget.onRemove,
+                  ),
               ],
             ),
             const SizedBox(height: 12),

@@ -70,8 +70,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return 'Operator';
       case 'ad':
         return 'Admin';
-      case 'ma':
-        return 'Manager';
       default:
         return _role;
     }
