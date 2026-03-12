@@ -86,11 +86,22 @@ class _ScanStartPageState extends State<ScanStartPage> {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode == 200) {
-        setState(() => _tkDoc = body);
+        // เช็ค Cancel (tk_status = 4) ก่อน set state
+        final tkStatus = body['detail']?['tk_status'] ?? body['tk_status'];
+        if (tkStatus == 4) {
+          CoolerAlert.show(
+            context,
+            title: 'เอกสารถูกยกเลิก',
+            message: 'เอกสาร Tracking No. นี้ถูก Cancel ไปแล้ว',
+            type: CoolerAlertType.error,
+          );
+        } else {
+          setState(() => _tkDoc = body);
+        }
       } else if (res.statusCode == 404) {
         CoolerAlert.show(
           context,
-          message: body['message']?.toString() ?? 'ไม่พบ Tracking No. นี้',
+          message: 'ไม่พบ Tracking No. นี้ในระบบ',
           type: CoolerAlertType.warning,
         );
       } else if (res.statusCode == 403) {
@@ -161,6 +172,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
           title: 'เริ่มงานสำเร็จ',
           message: 'op_sc_id: ${body['op_sc_id']}',
           type: CoolerAlertType.success,
+          duration: const Duration(seconds: 1),
         );
 
         await Future.delayed(const Duration(seconds: 1));
@@ -182,21 +194,26 @@ class _ScanStartPageState extends State<ScanStartPage> {
           ),
         );
       } else {
-        final msg = body['message']?.toString() ?? 'Start ไม่สำเร็จ';
+        final rawMsg = body['message']?.toString() ?? 'Start ไม่สำเร็จ';
         // [FIX] key เปลี่ยนจาก next_sta → suggested_next_sta
         final nextSta = body['suggested_next_sta']?.toString();
         final nextStaName = body['suggested_next_sta_name']?.toString();
 
+        final friendlyMsg = rawMsg
+            .replaceAll('tk_id', 'Tracking No.')
+            .replaceAll('not found', 'ไม่มีอยู่ในระบบ')
+            .replaceAll('Not found', 'ไม่มีอยู่ในระบบ');
         final display = (nextSta != null)
-            ? '$msg\n\n➡ ถัดไป: $nextSta ($nextStaName)'
-            : msg;
+            ? '$friendlyMsg\n\n➡ ถัดไป: $nextSta ($nextStaName)'
+            : friendlyMsg;
 
         CoolerAlert.show(
           context,
           title: 'ไม่สามารถเริ่มงานได้',
           message: display,
           type: CoolerAlertType.error,
-          duration: const Duration(seconds: 5),
+          // 5 วิเฉพาะมี next station ให้อ่าน, ปกติใช้ default 1 วิ
+          duration: const Duration(seconds: 2),
         );
       }
     } catch (_) {
@@ -490,6 +507,8 @@ class _ScanStartPageState extends State<ScanStartPage> {
         return '🔄 ผ่านบางสถานี';
       case 3:
         return '🟡 กำลังดำเนินการ';
+      case 4:
+        return '🚫 ยกเลิก';
       default:
         return '-';
     }

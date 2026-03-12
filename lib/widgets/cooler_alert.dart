@@ -9,7 +9,7 @@ class CoolerAlert {
     String title = 'แจ้งเตือน',
     required String message,
     CoolerAlertType type = CoolerAlertType.info,
-    Duration duration = const Duration(seconds: 3),
+    Duration duration = const Duration(seconds: 2),
   }) {
     if (!context.mounted) return;
 

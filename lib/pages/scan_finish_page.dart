@@ -382,7 +382,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         message:
             'รวม qty ทุก Group ($sumGroupQty) ต้องเท่ากับ จำนวน OK ($good) พอดี',
         type: CoolerAlertType.warning,
-        duration: const Duration(seconds: 4),
       );
       return;
     }
@@ -391,7 +390,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         context,
         message: 'รวม qty ทุก Group ($sumGroupQty) เกิน จำนวน OK ($good)',
         type: CoolerAlertType.warning,
-        duration: const Duration(seconds: 4),
       );
       return;
     }
@@ -893,7 +891,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
               : 'Finish สำเร็จ!',
           message: msgLines,
           type: CoolerAlertType.success,
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 1),
         );
         await Future.delayed(const Duration(seconds: 2));
         if (!mounted) return;
@@ -910,7 +908,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           title: 'Finish ไม่สำเร็จ',
           message: body['message']?.toString() ?? 'เกิดข้อผิดพลาด',
           type: CoolerAlertType.error,
-          duration: const Duration(seconds: 4),
         );
       }
     } catch (_) {
@@ -1404,17 +1401,21 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                             ],
                           );
 
-                          return needsScroll
-                              ? SizedBox(
-                                  height: 260,
-                                  child: Scrollbar(
-                                    thumbVisibility: true,
-                                    child: SingleChildScrollView(
-                                      child: buildContent(),
-                                    ),
-                                  ),
-                                )
-                              : buildContent();
+                          if (needsScroll) {
+                            final _scrollCtrl = ScrollController();
+                            return SizedBox(
+                              height: 260,
+                              child: Scrollbar(
+                                thumbVisibility: true,
+                                controller: _scrollCtrl,
+                                child: SingleChildScrollView(
+                                  controller: _scrollCtrl,
+                                  child: buildContent(),
+                                ),
+                              ),
+                            );
+                          }
+                          return buildContent();
                         },
                       ),
                       const SizedBox(height: 4),
@@ -1474,6 +1475,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 entry: _groups[i],
                 availableLots: lotsForThisGroup,
                 selfUsedMergeLots: selfUsedMergeLots,
+                usedByOtherGroups: usedLots,
                 // ข้อ 1: parked lots ส่งแยก — _GroupCard รวมเข้า merge rows เฉพาะ tf=3
                 ownParkedLotNos: parkedLotNos,
                 crossTkParkedLotNos: crossTkLotNos,
@@ -1596,7 +1598,7 @@ class _ParkedLotTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  'TK: $tkId  •  Station: ${staName.isNotEmpty ? "$sta ($staName)" : sta}',
+                  'TK No. : $tkId  •  Station: ${staName.isNotEmpty ? "$sta ($staName)" : sta}',
                   style: const TextStyle(fontSize: 10, color: Colors.grey),
                 ),
                 Text(
@@ -1663,7 +1665,10 @@ class _GroupEntry {
     }
 
     if (tfRsCode == 3) {
-      if (outPartNoMerge == null || outPartNoMerge!.isEmpty)
+      final _effectivePart = (outPartNoMerge?.isNotEmpty == true)
+          ? outPartNoMerge
+          : defaultPartNo;
+      if (_effectivePart == null || _effectivePart.isEmpty)
         return 'กรุณาเลือก Out Part No';
       if (mergeLots.length < 2) return 'ต้องมีอย่างน้อย 2 merge_lots';
       for (final m in mergeLots) {
@@ -1717,7 +1722,7 @@ class _GroupEntry {
     // tf=3
     return {
       'tf_rs_code': 3,
-      'out_part_no': outPartNoMerge ?? '',
+      'out_part_no': outPartNoMerge ?? defaultPartNo ?? '',
       if (colorId != null) 'color_id': colorId,
       'merge_lots': mergeLots
           .map(
@@ -1751,6 +1756,7 @@ class _GroupCard extends StatefulWidget {
   final _GroupEntry entry;
   final List<String> availableLots; // active lots เท่านั้น (tf=1/2)
   final Set<String> selfUsedMergeLots;
+  final Set<String> usedByOtherGroups;
   final List<String> ownParkedLotNos; // own-TK parked lots (tf=3 เท่านั้น)
   final List<String>
   crossTkParkedLotNos; // cross-TK parked lots (tf=3 เท่านั้น)
@@ -1769,6 +1775,7 @@ class _GroupCard extends StatefulWidget {
     required this.entry,
     required this.availableLots,
     required this.selfUsedMergeLots,
+    required this.usedByOtherGroups,
     required this.ownParkedLotNos,
     required this.crossTkParkedLotNos,
     required this.availableParts,
@@ -1804,8 +1811,13 @@ class _GroupCardState extends State<_GroupCard> {
   // lots สำหรับ merge rows (tf=3): active + own-parked + cross-TK parked
   List<String> get _mergeAvailableLots => [
     ...widget.availableLots,
-    ...widget.ownParkedLotNos,
-    ...widget.crossTkParkedLotNos,
+    // ✅ กรอง parked lots ที่ถูกเลือกใน group อื่นแล้วออก
+    ...widget.ownParkedLotNos.where(
+      (l) => !widget.usedByOtherGroups.contains(l),
+    ),
+    ...widget.crossTkParkedLotNos.where(
+      (l) => !widget.usedByOtherGroups.contains(l),
+    ),
   ];
 
   // ✅ Helper: สร้าง DropdownMenuItem<String> พร้อม cross-TK label — ไม่ overflow
@@ -1975,7 +1987,11 @@ class _GroupCardState extends State<_GroupCard> {
                 g.tfRsCode = v ?? 1;
                 g.fromLotNo = null;
                 g.outPartNo = null;
-                g.outPartNoMerge = null;
+                // ✅ Co-ID: auto-set default ทันที ไม่บังคับให้เลือกใหม่
+                g.outPartNoMerge =
+                    (v == 3 && (g.defaultPartNo?.isNotEmpty == true))
+                    ? g.defaultPartNo
+                    : null;
                 _autoLockFromLot();
                 widget.onChanged();
               }),

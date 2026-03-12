@@ -64,10 +64,15 @@ class _SummaryPageState extends State<SummaryPage> {
       } else {
         if (!mounted) return;
         setState(() => _loading = false);
+        final rawMsg = body['message']?.toString() ?? 'เกิดข้อผิดพลาด';
+        final displayMsg = rawMsg
+            .replaceAll('tk_id', 'Tracking No.')
+            .replaceAll('not found', 'ไม่มีอยู่ในระบบ')
+            .replaceAll('Not found', 'ไม่มีอยู่ในระบบ');
         CoolerAlert.show(
           context,
           title: 'โหลด Summary ไม่สำเร็จ',
-          message: body['message']?.toString() ?? 'เกิดข้อผิดพลาด',
+          message: displayMsg,
           type: CoolerAlertType.error,
         );
       }
