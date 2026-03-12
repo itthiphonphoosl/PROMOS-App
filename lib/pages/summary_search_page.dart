@@ -35,13 +35,23 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
       if (!mounted) return;
 
       if (res.statusCode == 200) {
-        // พบข้อมูล → เด้งไปหน้า Summary พร้อม pre-loaded data
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => SummaryPage(tkId: tkId, finishResult: body),
-          ),
-        );
+        // เช็ค Cancel ก่อน navigate
+        if ((body['tk_status'] ?? body['detail']?['tk_status']) == 4) {
+          CoolerAlert.show(
+            context,
+            title: 'เอกสารถูกยกเลิก',
+            message: 'เอกสาร Tracking No. นี้ถูก Cancel ไปแล้ว',
+            type: CoolerAlertType.error,
+          );
+        } else {
+          // พบข้อมูล → เด้งไปหน้า Summary พร้อม pre-loaded data
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => SummaryPage(tkId: tkId, finishResult: body),
+            ),
+          );
+        }
       } else {
         // error → แสดง alert อยู่หน้าเดิม ไม่เด้งไปไหนเลย
         final rawMsg = body['message']?.toString() ?? 'เกิดข้อผิดพลาด';
