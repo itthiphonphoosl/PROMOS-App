@@ -4,7 +4,7 @@ import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://172.16.12.71:4030/api';
+  static const String baseUrl = 'http://172.16.12.154:4030/api';
   static const String _defaultClientType = 'HH';
 
   static Uri _u(String path, [Map<String, String>? qp]) {
@@ -23,8 +23,6 @@ class ApiService {
   };
 
   static Future<void> _guard(http.Response res) async {
-    // 401 = token หมด/ไม่มี → force login
-    // 403 = มี token แต่ business logic ไม่ผ่าน → แค่แสดง error ไม่ force login
     if (res.statusCode == 401) {
       await forceToLogin();
     }
@@ -140,7 +138,9 @@ class ApiService {
     required int goodQty,
     required int scrapQty,
     required List<Map<String, dynamic>> groups,
-    int? colorId, // STA006 เท่านั้น
+    int? colorId,
+    List<String> crossTkUnselectedLots =
+        const [], // ✅ cross-TK lots ที่ไม่ได้เลือก
   }) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
@@ -150,6 +150,8 @@ class ApiService {
       'scrap_qty': scrapQty,
       'groups': groups,
       if (colorId != null) 'color_id': colorId,
+      if (crossTkUnselectedLots.isNotEmpty)
+        'cross_tk_unselected_lots': crossTkUnselectedLots,
     };
     final res = await http.post(
       _u('/op-scan/finish'),
@@ -194,9 +196,6 @@ class ApiService {
   }
 
   // ── Parked Lots ────────────────────────────────────────────
-  /// GET /api/op-scan/parked
-  /// operator → ดึง parked lots ของ station ตัวเอง (จาก token)
-  /// admin    → ส่ง op_sta_id ใน query string
   static Future<http.Response> getParkedLots({String? opStaId}) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);

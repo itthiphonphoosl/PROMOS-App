@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../config/api_service.dart';
 import '../widgets/cooler_alert.dart';
 import 'summary_page.dart';
@@ -49,6 +50,9 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
   // ✅ เคย transfer มาแล้ว → เปิดใช้ parked lot ใน From Lot
   bool _hasTransferHistory = false;
+
+  // ✅ lot_no → qty default (จาก transfer_qty / parked_qty)
+  Map<String, int> _lotQtyMap = {};
 
   // ตัดเอาเฉพาะ part_no จริง — ถ้าขึ้นด้วย 6 หลักตามด้วย - = lot, return ''
   String _extractPartNoOnly(String raw) {
@@ -221,6 +225,27 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           );
         }
 
+        // ── build lotQtyMap: lot_no → qty default ─────────────
+        // tf=1/2: to_lot_no → transfer_qty (latest batch)
+        // tf=3 parked: parked_lot_no → parked_qty
+        final qtyMap = <String, int>{};
+        for (final t in latestBatch) {
+          final lotNo = (t['to_lot_no']?.toString() ?? '').trim();
+          final qty = int.tryParse(t['transfer_qty']?.toString() ?? '') ?? 0;
+          if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
+        }
+        for (final p in stationAllRaw) {
+          final lotNo = (p['parked_lot_no']?.toString() ?? '').trim();
+          final qty = int.tryParse(p['parked_qty']?.toString() ?? '') ?? 0;
+          if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
+        }
+        // incoming_lots fallback (เอกสารใหม่ยังไม่มี transfer)
+        for (final il in (body['incoming_lots'] as List? ?? [])) {
+          final lotNo = (il['lot_no']?.toString() ?? '').trim();
+          final qty = int.tryParse(il['qty']?.toString() ?? '') ?? 0;
+          if (lotNo.isNotEmpty && qty > 0) qtyMap.putIfAbsent(lotNo, () => qty);
+        }
+
         if (!mounted) return;
         setState(() {
           _currentLots = leaf.isNotEmpty
@@ -231,6 +256,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           _crossTkParkedLots = crossTkParkedList;
           _defaultPartNo = lastPartNo;
           _hasTransferHistory = hasTransferHistory;
+          _lotQtyMap = qtyMap;
           _loadingLots = false;
         });
         return;
@@ -256,9 +282,25 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   bool _loadingParts = true;
   List<Map<String, dynamic>> _colors = [];
 
-  int _goodQty() => int.tryParse(_goodCtrl.text.trim()) ?? 0;
-  int _sumGroupQty() =>
-      _groups.fold(0, (a, g) => a + (int.tryParse(g.qtyCtrl.text.trim()) ?? 0));
+  int _goodQty() =>
+      int.tryParse(_goodCtrl.text.trim().replaceAll(',', '')) ?? 0;
+
+  // ✅ จัดรูปแบบตัวเลขใส่ลูกน้ำ เช่น 1000000 → 1,000,000
+  String _fmt(int n) {
+    final s = n.abs().toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return n < 0 ? '-${buf.toString()}' : buf.toString();
+  }
+
+  int _sumGroupQty() => _groups.fold(
+    0,
+    (a, g) =>
+        a + (int.tryParse(g.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0),
+  );
   int _remainingGood() => _goodQty() - _sumGroupQty();
   // ✅ isFirstScan = ยังไม่เคย transfer เลย → lock From Lot, ไม่ใช้ parked
   bool get _isFirstScan => !_hasTransferHistory;
@@ -339,8 +381,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   void _removeGroup(int i) => setState(() => _groups.removeAt(i));
 
   Future<void> _finish() async {
-    final goodRaw = int.tryParse(_goodCtrl.text.trim());
-    final scrapRaw = int.tryParse(_scrapCtrl.text.trim());
+    final goodRaw = int.tryParse(_goodCtrl.text.trim().replaceAll(',', ''));
+    final scrapRaw = int.tryParse(_scrapCtrl.text.trim().replaceAll(',', ''));
 
     if (goodRaw == null || scrapRaw == null) {
       CoolerAlert.show(
@@ -372,7 +414,10 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
     final sumGroupQty = _groups.fold(
       0,
-      (a, g) => a + ((int.tryParse(g.qtyCtrl.text.trim()) ?? 0).abs()),
+      (a, g) =>
+          a +
+          ((int.tryParse(g.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0)
+              .abs()),
     );
     final hasSplitGroup = _groups.any((g) => g.tfRsCode == 2);
 
@@ -380,7 +425,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       CoolerAlert.show(
         context,
         message:
-            'รวม qty ทุก Group ($sumGroupQty) ต้องเท่ากับ จำนวน OK ($good) พอดี',
+            'รวม qty ทุก Group (${_fmt(sumGroupQty)}) ต้องเท่ากับ จำนวน OK (${_fmt(good)}) พอดี',
         type: CoolerAlertType.warning,
       );
       return;
@@ -388,7 +433,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     if (hasSplitGroup && sumGroupQty > good) {
       CoolerAlert.show(
         context,
-        message: 'รวม qty ทุก Group ($sumGroupQty) เกิน จำนวน OK ($good)',
+        message:
+            'รวม qty ทุก Group (${_fmt(sumGroupQty)}) เกิน จำนวน OK (${_fmt(good)})',
         type: CoolerAlertType.warning,
       );
       return;
@@ -427,199 +473,16 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         .where((l) => l.trim().isNotEmpty && !selectedFromLots.contains(l))
         .toList();
 
-    if (willBeParked.isNotEmpty) {
-      // แสดง dialog ยืนยันก่อน
-      final confirmed = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => Dialog(
-          backgroundColor: Colors.transparent,
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 480),
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF8E7),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: const Color(0xFFE67E22).withOpacity(0.5),
-                width: 1.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFFF39C12).withOpacity(0.2),
-                  blurRadius: 24,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  height: 6,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFF39C12),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(20),
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 16, 16, 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 48,
-                            height: 48,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF39C12),
-                              borderRadius: BorderRadius.circular(14),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(
-                                    0xFFF39C12,
-                                  ).withOpacity(0.35),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.inventory_2_outlined,
-                              color: Colors.white,
-                              size: 26,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Text(
-                              'Lot ที่จะถูกพักอัตโนมัติ',
-                              style: TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFFF39C12),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      const Text(
-                        'Lot ต่อไปนี้ไม่ได้ถูกเลือก จะถูกพักไว้อัตโนมัติ:',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Color(0xFF2D3436),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      ...willBeParked.map(
-                        (l) => Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFFF3CD),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: const Color(0xFFFFD700).withOpacity(0.6),
-                            ),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(
-                                Icons.pause_circle_outline,
-                                color: Color(0xFFF39C12),
-                                size: 18,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  l,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF2D3436),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'ต้องการดำเนินการต่อหรือไม่?',
-                        style: TextStyle(fontSize: 13, color: Colors.grey),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () => Navigator.pop(ctx, false),
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                              child: const Text('ยกเลิก'),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: () => Navigator.pop(ctx, true),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFF39C12),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 12,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                              child: const Text(
-                                'ตกลง พักไว้',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-
-      if (confirmed != true) {
-        if (mounted) setState(() => _finishing = false);
-        return; // user กด ยกเลิก → กลับไปแก้ไข
-      }
-    }
-
     // ── ตรวจ tf=2 groups ที่ splits ไม่ครบ qty → จะพักส่วนที่เหลือ ──
     final splitParkInfo = <Map<String, dynamic>>[];
     for (int i = 0; i < _groups.length; i++) {
       final g = _groups[i];
       if (g.tfRsCode != 2) continue;
-      final gQty = int.tryParse(g.qtyCtrl.text.trim()) ?? 0;
+      final gQty = int.tryParse(g.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0;
       final splitSum = g.splits.fold(
         0,
-        (a, s) => a + (int.tryParse(s.qtyCtrl.text.trim()) ?? 0),
+        (a, s) =>
+            a + (int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0),
       );
       final diff = gQty - splitSum;
       if (diff > 0) {
@@ -638,7 +501,10 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       }
     }
 
-    if (splitParkInfo.isNotEmpty) {
+    final hasWillBeParked = willBeParked.isNotEmpty;
+    final hasSplitPark = splitParkInfo.isNotEmpty;
+
+    if (hasWillBeParked || hasSplitPark) {
       final confirmed = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
@@ -648,15 +514,15 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             constraints: const BoxConstraints(maxWidth: 480),
             margin: const EdgeInsets.symmetric(horizontal: 16),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFF8E7),
+              color: const Color(0xFFFFECEA),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: const Color(0xFFE67E22).withOpacity(0.5),
+                color: const Color(0xFFE74C3C).withOpacity(0.5),
                 width: 1.5,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFF39C12).withOpacity(0.2),
+                  color: const Color(0xFFE74C3C).withOpacity(0.2),
                   blurRadius: 24,
                   offset: const Offset(0, 8),
                 ),
@@ -665,11 +531,10 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // แถบสีบน
                 Container(
                   height: 6,
                   decoration: const BoxDecoration(
-                    color: Color(0xFFF39C12),
+                    color: Color(0xFFE74C3C),
                     borderRadius: BorderRadius.vertical(
                       top: Radius.circular(20),
                     ),
@@ -681,19 +546,18 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      // header row
                       Row(
                         children: [
                           Container(
                             width: 48,
                             height: 48,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFF39C12),
+                              color: const Color(0xFFE74C3C),
                               borderRadius: BorderRadius.circular(14),
                               boxShadow: [
                                 BoxShadow(
                                   color: const Color(
-                                    0xFFF39C12,
+                                    0xFFE74C3C,
                                   ).withOpacity(0.35),
                                   blurRadius: 10,
                                   offset: const Offset(0, 4),
@@ -709,11 +573,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                           const SizedBox(width: 12),
                           const Expanded(
                             child: Text(
-                              'Lot ที่จะถูกพักอัตโนมัติ',
+                              'Lot ไม่ถูกเลือกจะพักอัตโนมัติ',
                               style: TextStyle(
                                 fontSize: 17,
                                 fontWeight: FontWeight.w800,
-                                color: Color(0xFFF39C12),
+                                color: Color(0xFFE74C3C),
                               ),
                             ),
                           ),
@@ -728,16 +592,17 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                         ),
                       ),
                       const SizedBox(height: 10),
-                      // lot cards
-                      ...splitParkInfo.map(
-                        (info) => Container(
+
+                      // กรณีที่ 1: active lot ที่ไม่ได้เลือก
+                      ...willBeParked.map(
+                        (l) => Container(
                           margin: const EdgeInsets.only(bottom: 8),
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFFF3CD),
+                            color: const Color(0xFFFFE5E5),
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
-                              color: const Color(0xFFFFD700).withOpacity(0.6),
+                              color: const Color(0xFFE74C3C).withOpacity(0.4),
                             ),
                           ),
                           child: Row(
@@ -745,7 +610,43 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                             children: [
                               const Icon(
                                 Icons.pause_circle_outline,
-                                color: Color(0xFFF39C12),
+                                color: Color(0xFFE74C3C),
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  l,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF2D3436),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      // กรณีที่ 2: split ไม่ครบ qty
+                      ...splitParkInfo.map(
+                        (info) => Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFE5E5),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(0xFFE74C3C).withOpacity(0.4),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.pause_circle_outline,
+                                color: Color(0xFFE74C3C),
                                 size: 18,
                               ),
                               const SizedBox(width: 8),
@@ -776,12 +677,14 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                           ),
                         ),
                       ),
+
                       const SizedBox(height: 6),
                       const Text(
                         'ต้องการดำเนินการต่อหรือไม่?',
                         style: TextStyle(fontSize: 13, color: Colors.grey),
                       ),
                       const SizedBox(height: 16),
+
                       Row(
                         children: [
                           Expanded(
@@ -803,7 +706,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                             child: ElevatedButton(
                               onPressed: () => Navigator.pop(ctx, true),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFF39C12),
+                                backgroundColor: const Color(0xFFE74C3C),
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 12,
                                 ),
@@ -830,17 +733,230 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           ),
         ),
       );
-      if (confirmed != true) return;
+
+      if (confirmed != true) {
+        if (mounted) setState(() => _finishing = false);
+        return;
+      }
     }
+
+    //**  Alert ซ้ำอันีน้สีส้ม + ไม่แสดง Lot ที่ไม่ได้ใช้แล้วจะเอาไปพัก */
+    // if (splitParkInfo.isNotEmpty) {
+    //   final confirmed = await showDialog<bool>(
+    //     context: context,
+    //     barrierDismissible: false,
+    //     builder: (ctx) => Dialog(
+    //       backgroundColor: Colors.transparent,
+    //       child: Container(
+    //         constraints: const BoxConstraints(maxWidth: 480),
+    //         margin: const EdgeInsets.symmetric(horizontal: 16),
+    //         decoration: BoxDecoration(
+    //           color: const Color(0xFFFFF8E7),
+    //           borderRadius: BorderRadius.circular(20),
+    //           border: Border.all(
+    //             color: const Color(0xFFE67E22).withOpacity(0.5),
+    //             width: 1.5,
+    //           ),
+    //           boxShadow: [
+    //             BoxShadow(
+    //               color: const Color(0xFFF39C12).withOpacity(0.2),
+    //               blurRadius: 24,
+    //               offset: const Offset(0, 8),
+    //             ),
+    //           ],
+    //         ),
+    //         child: Column(
+    //           mainAxisSize: MainAxisSize.min,
+    //           children: [
+    //             // แถบสีบน
+    //             Container(
+    //               height: 6,
+    //               decoration: const BoxDecoration(
+    //                 color: Color(0xFFF39C12),
+    //                 borderRadius: BorderRadius.vertical(
+    //                   top: Radius.circular(20),
+    //                 ),
+    //               ),
+    //             ),
+    //             Padding(
+    //               padding: const EdgeInsets.fromLTRB(20, 16, 16, 20),
+    //               child: Column(
+    //                 crossAxisAlignment: CrossAxisAlignment.start,
+    //                 mainAxisSize: MainAxisSize.min,
+    //                 children: [
+    //                   // header row
+    //                   Row(
+    //                     children: [
+    //                       Container(
+    //                         width: 48,
+    //                         height: 48,
+    //                         decoration: BoxDecoration(
+    //                           color: const Color(0xFFF39C12),
+    //                           borderRadius: BorderRadius.circular(14),
+    //                           boxShadow: [
+    //                             BoxShadow(
+    //                               color: const Color(
+    //                                 0xFFF39C12,
+    //                               ).withOpacity(0.35),
+    //                               blurRadius: 10,
+    //                               offset: const Offset(0, 4),
+    //                             ),
+    //                           ],
+    //                         ),
+    //                         child: const Icon(
+    //                           Icons.inventory_2_outlined,
+    //                           color: Colors.white,
+    //                           size: 26,
+    //                         ),
+    //                       ),
+    //                       const SizedBox(width: 12),
+    //                       const Expanded(
+    //                         child: Text(
+    //                           'Lot ที่จะถูกพักอัตโนมัติ',
+    //                           style: TextStyle(
+    //                             fontSize: 17,
+    //                             fontWeight: FontWeight.w800,
+    //                             color: Color(0xFFF39C12),
+    //                           ),
+    //                         ),
+    //                       ),
+    //                     ],
+    //                   ),
+    //                   const SizedBox(height: 14),
+    //                   const Text(
+    //                     'Lot ต่อไปนี้ไม่ได้ถูกเลือก จะถูกพักไว้อัตโนมัติ:',
+    //                     style: TextStyle(
+    //                       fontSize: 13,
+    //                       color: Color(0xFF2D3436),
+    //                     ),
+    //                   ),
+    //                   const SizedBox(height: 10),
+    //                   // lot cards
+    //                   ...splitParkInfo.map(
+    //                     (info) => Container(
+    //                       margin: const EdgeInsets.only(bottom: 8),
+    //                       padding: const EdgeInsets.all(12),
+    //                       decoration: BoxDecoration(
+    //                         color: const Color(0xFFFFF3CD),
+    //                         borderRadius: BorderRadius.circular(10),
+    //                         border: Border.all(
+    //                           color: const Color(0xFFFFD700).withOpacity(0.6),
+    //                         ),
+    //                       ),
+    //                       child: Row(
+    //                         crossAxisAlignment: CrossAxisAlignment.start,
+    //                         children: [
+    //                           const Icon(
+    //                             Icons.pause_circle_outline,
+    //                             color: Color(0xFFF39C12),
+    //                             size: 18,
+    //                           ),
+    //                           const SizedBox(width: 8),
+    //                           Expanded(
+    //                             child: Column(
+    //                               crossAxisAlignment: CrossAxisAlignment.start,
+    //                               children: [
+    //                                 Text(
+    //                                   info['lot'] as String,
+    //                                   style: const TextStyle(
+    //                                     fontSize: 12,
+    //                                     fontWeight: FontWeight.w600,
+    //                                     color: Color(0xFF2D3436),
+    //                                   ),
+    //                                 ),
+    //                                 const SizedBox(height: 2),
+    //                                 Text(
+    //                                   'Group ${info['group']}: จะพัก ${info['diff']} ชิ้น (splits ไม่ครบ qty)',
+    //                                   style: TextStyle(
+    //                                     fontSize: 11,
+    //                                     color: Colors.grey.shade700,
+    //                                   ),
+    //                                 ),
+    //                               ],
+    //                             ),
+    //                           ),
+    //                         ],
+    //                       ),
+    //                     ),
+    //                   ),
+    //                   const SizedBox(height: 6),
+    //                   const Text(
+    //                     'ต้องการดำเนินการต่อหรือไม่?',
+    //                     style: TextStyle(fontSize: 13, color: Colors.grey),
+    //                   ),
+    //                   const SizedBox(height: 16),
+    //                   Row(
+    //                     children: [
+    //                       Expanded(
+    //                         child: OutlinedButton(
+    //                           onPressed: () => Navigator.pop(ctx, false),
+    //                           style: OutlinedButton.styleFrom(
+    //                             padding: const EdgeInsets.symmetric(
+    //                               vertical: 12,
+    //                             ),
+    //                             shape: RoundedRectangleBorder(
+    //                               borderRadius: BorderRadius.circular(10),
+    //                             ),
+    //                           ),
+    //                           child: const Text('ยกเลิก'),
+    //                         ),
+    //                       ),
+    //                       const SizedBox(width: 10),
+    //                       Expanded(
+    //                         child: ElevatedButton(
+    //                           onPressed: () => Navigator.pop(ctx, true),
+    //                           style: ElevatedButton.styleFrom(
+    //                             backgroundColor: const Color(0xFFF39C12),
+    //                             padding: const EdgeInsets.symmetric(
+    //                               vertical: 12,
+    //                             ),
+    //                             shape: RoundedRectangleBorder(
+    //                               borderRadius: BorderRadius.circular(10),
+    //                             ),
+    //                           ),
+    //                           child: const Text(
+    //                             'ตกลง พักไว้',
+    //                             style: TextStyle(
+    //                               color: Colors.white,
+    //                               fontWeight: FontWeight.w700,
+    //                             ),
+    //                           ),
+    //                         ),
+    //                       ),
+    //                     ],
+    //                   ),
+    //                 ],
+    //               ),
+    //             ),
+    //           ],
+    //         ),
+    //       ),
+    //     ),
+    //   );
+    //   if (confirmed != true) return;
+    // }
 
     setState(() => _finishing = true);
     try {
+      // ✅ หา cross-TK lots ที่ไม่ถูกเลือก → ส่งไปให้ server park ที่ station นี้
+      final selectedLots = <String>{};
+      for (final g in _groups) {
+        if (g.fromLotNo != null) selectedLots.add(g.fromLotNo!);
+        for (final m in g.mergeLots) {
+          if (m.fromLotNo != null) selectedLots.add(m.fromLotNo!);
+        }
+      }
+      final crossTkUnselected = _crossTkParkedLots
+          .map((p) => p['parked_lot_no']?.toString() ?? '')
+          .where((l) => l.isNotEmpty && !selectedLots.contains(l))
+          .toList();
+
       final res = await ApiService.finishScan(
         opScId: widget.opScId,
         goodQty: good,
         scrapQty: scrap,
         groups: _groups.map((g) => g.toJson()).toList(),
-        // ✅ color_id ตอนนี้อยู่ใน groups แต่ละตัวแล้ว (per-group / per-split)
+        crossTkUnselectedLots: crossTkUnselected,
       );
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
@@ -925,7 +1041,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   // ── Pre-Finish Summary Box ──
   Widget _buildPreFinishSummary() {
     final good = _goodQty();
-    final total = good + (int.tryParse(_scrapCtrl.text.trim()) ?? 0);
+    final total =
+        good + (int.tryParse(_scrapCtrl.text.trim().replaceAll(',', '')) ?? 0);
     final sumGrp = _sumGroupQty();
     final remain = good - sumGrp;
     final isOver = remain < 0;
@@ -936,10 +1053,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     for (int i = 0; i < _groups.length; i++) {
       final g = _groups[i];
       if (g.tfRsCode != 2) continue;
-      final gQty = int.tryParse(g.qtyCtrl.text.trim()) ?? 0;
+      final gQty = int.tryParse(g.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0;
       final splitSum = g.splits.fold(
         0,
-        (a, s) => a + (int.tryParse(s.qtyCtrl.text.trim()) ?? 0),
+        (a, s) =>
+            a + (int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0),
       );
       final diff = gQty - splitSum;
       if (diff > 0) {
@@ -980,27 +1098,25 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Total qty (OK + NG) = $total',
+            'Total qty (OK + NG) = ${_fmt(total)}',
             style: const TextStyle(fontSize: 12),
           ),
           const SizedBox(height: 4),
           Text(
-            'Sum Group qty = $sumGrp  (ต้องเท่ากับ จำนวน OK = $good)',
+            'Sum Group qty = ${_fmt(sumGrp)}  (ต้องเท่ากับ จำนวน OK = ${_fmt(good)})',
             style: const TextStyle(fontSize: 12),
           ),
           const SizedBox(height: 4),
           Text(
             isOver
-                ? '⚠️ เกิน จำนวน OK ${remain.abs()} ชิ้น'
+                ? '⚠️ รวมทุก Group (${_fmt(sumGrp)} ชิ้น) เกิน จำนวน OK (${_fmt(good)} ชิ้น)'
                 : isExact && groupParkLines.isEmpty
-                ? '✅ ครบพอดี'
+                ? '✅ รวมทุก Group ครบพอดีกับจำนวน OK (${_fmt(good)} ชิ้น)'
+                : hasSplitGroup
+                ? '🔵 Split Group จะพักส่วนที่เหลือจาก จำนวน OK (${_fmt(good)} ชิ้น) อัตโนมัติ'
                 : remain > 0
-                ? hasSplitGroup && _groups.length == 1
-                      ? '🔵 ยังเหลือ $remain ชิ้น → จะพักอัตโนมัติ'
-                      : hasSplitGroup
-                      ? '🔵 ยังขาดอีก $remain ชิ้น → ส่วนที่เหลือจะพักอัตโนมัติใน Split Group'
-                      : '🔵 ยังขาดอีก $remain ชิ้น'
-                : '✅ ครบพอดี',
+                ? '⚠️ รวมทุก Group ได้ [${_fmt(sumGrp)} ชิ้น] ยังขาดอีก ${_fmt(remain)} ชิ้น จาก OK ${_fmt(good)} ชิ้น'
+                : '✅ รวมทุก Group ครบพอดีกับจำนวน OK (${_fmt(good)} ชิ้น)',
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
@@ -1131,13 +1247,17 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                               border: OutlineInputBorder(),
                             ),
                             keyboardType: TextInputType.number,
+                            inputFormatters: [_ThousandsFormatter()],
                             onChanged: (_) {
                               setState(() {
                                 _ensureOneGroup();
                                 if (_groups.length == 1) {
-                                  _groups[0].qtyCtrl.text = _goodQty()
-                                      .abs()
-                                      .toString();
+                                  final qty = _goodQty();
+                                  _groups[0].qtyCtrl.text = qty > 0
+                                      ? _ThousandsFormatter._insertCommas(
+                                          qty.toString(),
+                                        )
+                                      : '';
                                 }
                               });
                             },
@@ -1152,6 +1272,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                               border: OutlineInputBorder(),
                             ),
                             keyboardType: TextInputType.number,
+                            inputFormatters: [_ThousandsFormatter()],
                             onChanged: (_) => setState(() {}),
                           ),
                         ),
@@ -1160,16 +1281,33 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                     // indicator
                     Builder(
                       builder: (ctx) {
-                        final g = (int.tryParse(_goodCtrl.text.trim()) ?? 0)
-                            .abs();
-                        final s = (int.tryParse(_scrapCtrl.text.trim()) ?? 0)
-                            .abs();
+                        final g =
+                            (int.tryParse(
+                                      _goodCtrl.text.trim().replaceAll(',', ''),
+                                    ) ??
+                                    0)
+                                .abs();
+                        final s =
+                            (int.tryParse(
+                                      _scrapCtrl.text.trim().replaceAll(
+                                        ',',
+                                        '',
+                                      ),
+                                    ) ??
+                                    0)
+                                .abs();
                         final total = g + s;
                         final sumGrp = _groups.fold(
                           0,
                           (a, x) =>
                               a +
-                              ((int.tryParse(x.qtyCtrl.text.trim()) ?? 0)
+                              ((int.tryParse(
+                                        x.qtyCtrl.text.trim().replaceAll(
+                                          ',',
+                                          '',
+                                        ),
+                                      ) ??
+                                      0)
                                   .abs()),
                         );
                         final remain = g - sumGrp;
@@ -1215,24 +1353,24 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Total qty (OK + NG) = $total',
+                                  'Total qty (OK + NG) = ${_fmt(total)}',
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
                                   hasSplit
-                                      ? 'Sum Group qty = $sumGrp  (ต้องไม่เกิน จำนวน OK = $g)'
-                                      : 'Sum Group qty = $sumGrp  (ต้องเท่ากับ จำนวน OK = $g)',
+                                      ? 'Sum Group qty = ${_fmt(sumGrp)}  (ต้องไม่เกิน จำนวน OK = ${_fmt(g)})'
+                                      : 'Sum Group qty = ${_fmt(sumGrp)}  (ต้องเท่ากับ จำนวน OK = ${_fmt(g)})',
                                   style: const TextStyle(fontSize: 12),
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
                                   isOver
-                                      ? '⚠️ เกิน จำนวน OK ${remain.abs()} ชิ้น'
+                                      ? '⚠️ เกิน จำนวน OK ${_fmt(remain.abs())} ชิ้น'
                                       : isShort
-                                      ? '⚠️ ยังขาดอีก $remain ชิ้น (ต้องครบ $g)'
+                                      ? '⚠️ ยังขาดอีก ${_fmt(remain)} ชิ้น (ต้องครบ ${_fmt(g)})'
                                       : isParked
-                                      ? '🔵 จะพักอัตโนมัติ $remain ชิ้น'
+                                      ? '🔵 จะพักอัตโนมัติ ${_fmt(remain)} ชิ้น'
                                       : '✅ ครบพอดี',
                                   style: TextStyle(
                                     fontSize: 12,
@@ -1484,6 +1622,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 staId: _staId, // ✅ STA006 check
                 isFirstScan: _isFirstScan,
                 crossTkLotMap: _crossTkLotMap,
+                lotQtyMap: _lotQtyMap,
                 totalGroups: _groups.length,
                 onChanged: () => setState(() {}),
                 onRemove: () => _removeGroup(i),
@@ -1503,7 +1642,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             ),
             const SizedBox(height: 16),
 
-            // ── Pre-Finish Summary ──
+            // ── Pre-Finish Summary (ก่อนกด Finish) ──
             _buildPreFinishSummary(),
             const SizedBox(height: 12),
 
@@ -1644,7 +1783,7 @@ class _GroupEntry {
   final List<_MergeLotEntry> mergeLots = [_MergeLotEntry(), _MergeLotEntry()];
 
   String? validate() {
-    final qty = int.tryParse(qtyCtrl.text.trim());
+    final qty = int.tryParse(qtyCtrl.text.trim().replaceAll(',', ''));
     if (qty == null || qty <= 0) return 'qty ต้องมากกว่า 0';
 
     // tf=1 / tf=2: out_part_no ใช้ defaultPartNo อัตโนมัติ → ไม่ต้อง validate ที่นี่
@@ -1653,13 +1792,14 @@ class _GroupEntry {
       for (final s in splits) {
         if (s.partNo == null || s.partNo!.isEmpty)
           return 'เลือก Part No ใน split ให้ครบ';
-        final q = int.tryParse(s.qtyCtrl.text.trim());
+        final q = int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', ''));
         if (q == null) return 'qty ใน split ต้องเป็นตัวเลข';
         if (q <= 0) return 'qty ใน split ต้องมากกว่า 0';
       }
       final sumSplit = splits.fold(
         0,
-        (a, s) => a + (int.tryParse(s.qtyCtrl.text.trim()) ?? 0),
+        (a, s) =>
+            a + (int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0),
       );
       if (sumSplit > qty) return 'sum splits ($sumSplit) เกิน group qty ($qty)';
     }
@@ -1674,13 +1814,14 @@ class _GroupEntry {
       for (final m in mergeLots) {
         if (m.fromLotNo == null || m.fromLotNo!.isEmpty)
           return 'เลือก From Lot ใน merge ให้ครบ';
-        final q = int.tryParse(m.qtyCtrl.text.trim());
+        final q = int.tryParse(m.qtyCtrl.text.trim().replaceAll(',', ''));
         if (q == null) return 'qty ใน merge ต้องเป็นตัวเลข';
         if (q <= 0) return 'qty ใน merge ต้องมากกว่า 0';
       }
       final sumMerge = mergeLots.fold(
         0,
-        (a, m) => a + (int.tryParse(m.qtyCtrl.text.trim()) ?? 0),
+        (a, m) =>
+            a + (int.tryParse(m.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0),
       );
       if (sumMerge != qty) return 'sum merge ($sumMerge) ≠ group qty ($qty)';
     }
@@ -1689,7 +1830,7 @@ class _GroupEntry {
   }
 
   Map<String, dynamic> toJson() {
-    final qty = int.tryParse(qtyCtrl.text.trim()) ?? 0;
+    final qty = int.tryParse(qtyCtrl.text.trim().replaceAll(',', '')) ?? 0;
 
     if (tfRsCode == 1) {
       return {
@@ -1712,7 +1853,9 @@ class _GroupEntry {
             .map(
               (s) => {
                 'out_part_no': s.partNo ?? '',
-                'qty': int.tryParse(s.qtyCtrl.text.trim()) ?? 0,
+                'qty':
+                    int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', '')) ??
+                    0,
                 if (s.colorId != null) 'color_id': s.colorId,
               },
             )
@@ -1728,7 +1871,8 @@ class _GroupEntry {
           .map(
             (m) => {
               'from_lot_no': m.fromLotNo ?? '',
-              'qty': int.tryParse(m.qtyCtrl.text.trim()) ?? 0,
+              'qty':
+                  int.tryParse(m.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0,
             },
           )
           .toList(),
@@ -1765,6 +1909,7 @@ class _GroupCard extends StatefulWidget {
   final String? staId; // ✅ ใช้ตรวจว่าเป็น STA006 หรือไม่
   final bool isFirstScan;
   final Map<String, String> crossTkLotMap;
+  final Map<String, int> lotQtyMap;
   final int totalGroups;
   final VoidCallback onChanged;
   final VoidCallback onRemove;
@@ -1783,6 +1928,7 @@ class _GroupCard extends StatefulWidget {
     required this.staId,
     required this.isFirstScan,
     required this.crossTkLotMap,
+    required this.lotQtyMap,
     required this.totalGroups,
     required this.onChanged,
     required this.onRemove,
@@ -1883,6 +2029,11 @@ class _GroupCardState extends State<_GroupCard> {
         g.fromLotNo == null &&
         widget.availableLots.isNotEmpty) {
       g.fromLotNo = widget.availableLots.first;
+      // ✅ prefill qty default สำหรับ single-lot auto-lock
+      final dq = widget.lotQtyMap[g.fromLotNo!];
+      if (dq != null && dq > 0 && g.qtyCtrl.text.isEmpty) {
+        g.qtyCtrl.text = dq.toString();
+      }
     }
   }
 
@@ -2002,6 +2153,7 @@ class _GroupCardState extends State<_GroupCard> {
             TextField(
               controller: g.qtyCtrl,
               keyboardType: TextInputType.number,
+              inputFormatters: [_ThousandsFormatter()],
               decoration: const InputDecoration(
                 labelText: 'Qty ของ Group นี้',
                 border: OutlineInputBorder(),
@@ -2112,6 +2264,13 @@ class _GroupCardState extends State<_GroupCard> {
                                 .toList(),
                             onChanged: (v) => setState(() {
                               g.fromLotNo = v;
+                              // ✅ prefill group qty จาก lotQtyMap
+                              if (v != null) {
+                                final dq = widget.lotQtyMap[v];
+                                if (dq != null && dq > 0) {
+                                  g.qtyCtrl.text = dq.toString();
+                                }
+                              }
                               widget.onChanged();
                             }),
                           ),
@@ -2274,7 +2433,26 @@ class _GroupCardState extends State<_GroupCard> {
                   entry: g.mergeLots[i],
                   availableLots: lotsForRow,
                   crossTkLotMap: widget.crossTkLotMap,
-                  onChanged: widget.onChanged,
+                  lotQtyMap: widget.lotQtyMap,
+                  // ✅ ต้องใช้ _GroupCardState setState เพื่อให้ otherMergePicked
+                  //    recalculate ทันที → ซ่อน lot ที่ row อื่นเลือกไปแล้วออกจาก dropdown
+                  onChanged: () => setState(() {
+                    widget.onChanged();
+                  }),
+                  onSumChanged: () => setState(() {
+                    // ✅ sum qty ทุก merge row กลับไปใส่ group qty อัตโนมัติ
+                    final total = g.mergeLots.fold<int>(
+                      0,
+                      (a, m) =>
+                          a +
+                          (int.tryParse(
+                                m.qtyCtrl.text.trim().replaceAll(',', ''),
+                              ) ??
+                              0),
+                    );
+                    if (total > 0) g.qtyCtrl.text = total.toString();
+                    widget.onChanged();
+                  }),
                   onRemove: g.mergeLots.length > 2
                       ? () => setState(() {
                           g.mergeLots.removeAt(i);
@@ -2491,6 +2669,7 @@ class _QtyField extends StatelessWidget {
       child: TextField(
         controller: controller,
         keyboardType: TextInputType.number,
+        inputFormatters: [_ThousandsFormatter()],
         style: const TextStyle(fontSize: 13),
         decoration: const InputDecoration.collapsed(hintText: ''),
         onChanged: onChanged,
@@ -2952,7 +3131,10 @@ class _MergeLotRow extends StatelessWidget {
   final _MergeLotEntry entry;
   final List<String> availableLots;
   final Map<String, String> crossTkLotMap;
+  final Map<String, int> lotQtyMap;
   final VoidCallback onChanged;
+  final VoidCallback
+  onSumChanged; // callback เมื่อ qty row เปลี่ยน → sum กลับ group
   final VoidCallback? onRemove;
 
   const _MergeLotRow({
@@ -2960,7 +3142,9 @@ class _MergeLotRow extends StatelessWidget {
     required this.entry,
     required this.availableLots,
     required this.crossTkLotMap,
+    required this.lotQtyMap,
     required this.onChanged,
+    required this.onSumChanged,
     this.onRemove,
   });
 
@@ -3055,7 +3239,15 @@ class _MergeLotRow extends StatelessWidget {
             }).toList(),
             onChanged: (v) {
               entry.fromLotNo = v;
+              // ✅ prefill qty จาก lotQtyMap เมื่อเลือก lot
+              if (v != null) {
+                final dq = lotQtyMap[v];
+                if (dq != null && dq > 0) {
+                  entry.qtyCtrl.text = dq.toString();
+                }
+              }
               onChanged();
+              onSumChanged(); // trigger sum กลับ group qty
             },
           ),
         ),
@@ -3064,6 +3256,11 @@ class _MergeLotRow extends StatelessWidget {
           flex: 1,
           child: TextField(
             controller: entry.qtyCtrl,
+            keyboardType: TextInputType.number,
+            onChanged: (_) {
+              onSumChanged();
+              onChanged();
+            },
             decoration: const InputDecoration(
               labelText: 'Qty',
               border: OutlineInputBorder(),
@@ -3073,8 +3270,6 @@ class _MergeLotRow extends StatelessWidget {
                 vertical: 10,
               ),
             ),
-            keyboardType: TextInputType.number,
-            onChanged: (_) => onChanged(),
           ),
         ),
         if (onRemove != null)
@@ -3217,5 +3412,38 @@ class _InfoCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Thousands Separator Input Formatter
+// ══════════════════════════════════════════════════════════════════
+class _ThousandsFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    // strip commas to get raw digits
+    final raw = newValue.text.replaceAll(',', '');
+    if (raw.isEmpty) return newValue.copyWith(text: '');
+    final n = int.tryParse(raw);
+    if (n == null) return oldValue; // reject non-numeric
+
+    // format with commas
+    final formatted = _insertCommas(raw);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+
+  static String _insertCommas(String s) {
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return buf.toString();
   }
 }

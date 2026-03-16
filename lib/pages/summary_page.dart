@@ -180,6 +180,12 @@ class _SummaryPageState extends State<SummaryPage> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
+      isDismissible: true,
+      enableDrag: true,
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.90,
+        maxWidth: 560,
+      ),
       builder: (_) {
         return SafeArea(
           child: Padding(
@@ -254,6 +260,11 @@ class _SummaryPageState extends State<SummaryPage> {
                           _ps?.toString() == '1' ||
                           _ps?.toString() == 'true';
 
+                      // ✅ เช็ค station — แสดง badge เฉพาะ lot ที่พักใน station ของ scan นี้
+                      final scanStaId = scan['op_sta_id']?.toString() ?? '';
+                      final tStaId = t['op_sta_id']?.toString() ?? '';
+                      final isParkedHere = isParked && tStaId == scanStaId;
+
                       // from_tk ≠ to_tk → TK นี้ดึง lot พักจาก TK อื่นมาใช้ (Co-ID cross-TK)
                       final isCrossTk =
                           fromTk.isNotEmpty &&
@@ -289,8 +300,8 @@ class _SummaryPageState extends State<SummaryPage> {
                                     ),
                                   ),
                                   const SizedBox(width: 6),
-                                  // badge ส้ม: lot_parked_status=1 — lot พักของ TK นี้
-                                  if (isParked && !isCrossTk)
+                                  // badge ส้ม: lot_parked_status=1 — lot พักของ TK นี้ (เฉพาะ station นี้)
+                                  if (isParkedHere && !isCrossTk)
                                     Container(
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 8,

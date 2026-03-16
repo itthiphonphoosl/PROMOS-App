@@ -131,6 +131,16 @@ class _ScanStartPageState extends State<ScanStartPage> {
     }
   }
 
+  void _reset() {
+    setState(() {
+      _tkCtrl.clear();
+      _tkDoc = null;
+      _selectedMcId = null;
+      _selectedMcName = null;
+    });
+    _loadMachines();
+  }
+
   Future<void> _openQrScanner() async {
     final result = await Navigator.push<String>(
       context,
@@ -236,7 +246,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
         foregroundColor: Colors.white,
         title: const Text('Start Scan'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadMachines),
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _reset),
         ],
       ),
       body: SingleChildScrollView(
