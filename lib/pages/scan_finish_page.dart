@@ -1115,7 +1115,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 : hasSplitGroup
                 ? '🔵 Split Group จะพักส่วนที่เหลือจาก จำนวน OK (${_fmt(good)} ชิ้น) อัตโนมัติ'
                 : remain > 0
-                ? '⚠️ รวมทุก Group ได้ [${_fmt(sumGrp)} ชิ้น] ยังขาดอีก ${_fmt(remain)} ชิ้น จาก OK ${_fmt(good)} ชิ้น'
+                ? '⚠️ รวมทุก Group ได้ (${_fmt(sumGrp)} ชิ้น) ยังขาดอีก ${_fmt(remain)} ชิ้น จาก OK (${_fmt(good)} ชิ้น)'
                 : '✅ รวมทุก Group ครบพอดีกับจำนวน OK (${_fmt(good)} ชิ้น)',
             style: TextStyle(
               fontSize: 12,
