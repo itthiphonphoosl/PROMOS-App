@@ -79,13 +79,18 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
     final opScId = item['op_sc_id']?.toString() ?? '';
 
     try {
-      final res = await ApiService.getActiveScanByTkId(tkId);
+      final res = await ApiService.getOpScanById(opScId);
       final body = jsonDecode(res.body) as Map<String, dynamic>;
+
       final lots =
           (body['current_lots'] as List?)
               ?.map((e) => Map<String, dynamic>.from(e as Map))
               .toList() ??
           [];
+
+      final opItem =
+          (body['item'] as Map?)?.cast<String, dynamic>() ??
+          <String, dynamic>{};
 
       if (!mounted) return;
       Navigator.push(
@@ -94,15 +99,25 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
           builder: (_) => ScanFinishPage(
             opScId: opScId,
             tkId: tkId,
-            // [FIX] ใช้ field จาก active scan item ที่ถูกต้อง
-            // lot_no ≠ part_no — part_no อยู่ใน tk_doc หรือ detail
             tkDoc: {
               'part_no': item['part_no']?.toString() ?? '',
               'part_name': item['part_name']?.toString() ?? '',
-              'op_sta_id': item['op_sta_id']?.toString() ?? '',
-              'op_sta_name': item['op_sta_name']?.toString() ?? '',
-              'MC_id': item['MC_id']?.toString() ?? '',
-              'MC_name': item['MC_name']?.toString() ?? '',
+              'op_sta_id':
+                  opItem['op_sta_id']?.toString() ??
+                  item['op_sta_id']?.toString() ??
+                  '',
+              'op_sta_name':
+                  opItem['op_sta_name']?.toString() ??
+                  item['op_sta_name']?.toString() ??
+                  '',
+              'MC_id':
+                  opItem['MC_id']?.toString() ??
+                  item['MC_id']?.toString() ??
+                  '',
+              'MC_name':
+                  opItem['MC_name']?.toString() ??
+                  item['MC_name']?.toString() ??
+                  '',
             },
             allLots: lots,
           ),

@@ -4,7 +4,7 @@ import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://172.16.12.154:4030/api';
+  static const String baseUrl = 'http://172.16.12.17:4030/api';
   static const String _defaultClientType = 'HH';
 
   static Uri _u(String path, [Map<String, String>? qp]) {
@@ -106,6 +106,19 @@ class ApiService {
   }
 
   // ── TK Documents ───────────────────────────────────────────
+  // แปลง lot_no → tk_id
+  static Future<http.Response> getTkIdByLotNo(String lotNo) async {
+    final token = await _token();
+    if (token == null) return http.Response('{"message":"No token"}', 401);
+    // ส่งเป็น query param — ปลอดภัยกว่า path param สำหรับ lot_no ที่มี space/วงเล็บ
+    final res = await http.get(
+      _u('/TKDocs/by-lot', {'lot_no': lotNo}),
+      headers: _headers(token: token),
+    );
+    await _guard(res);
+    return res;
+  }
+
   static Future<http.Response> getTkDocById(String tkId) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
@@ -118,6 +131,19 @@ class ApiService {
   }
 
   // ── Op Scan ────────────────────────────────────────────────
+
+  // lot_no → tk_id (ใช้ใน Start Scan แทนการสแกน tk_id โดยตรง)
+  static Future<http.Response> lookupTkByLotNo(String lotNo) async {
+    final token = await _token();
+    if (token == null) return http.Response('{"message":"No token"}', 401);
+    final res = await http.get(
+      _u('/op-scans/lookup-by-lot/${Uri.encodeComponent(lotNo)}'),
+      headers: _headers(token: token),
+    );
+    await _guard(res);
+    return res;
+  }
+
   static Future<http.Response> startScan({
     required String tkId,
     required String mcId,
@@ -184,12 +210,45 @@ class ApiService {
     return res;
   }
 
+  static Future<http.Response> getOpScanById(String opScId) async {
+    final token = await _token();
+    if (token == null) return http.Response('{"message":"No token"}', 401);
+    final res = await http.get(
+      _u('/op-scan/$opScId'),
+      headers: _headers(token: token),
+    );
+    await _guard(res);
+    return res;
+  }
+
   static Future<http.Response> getSummaryByTkId(String tkId) async {
     final token = await _token();
     if (token == null) return http.Response('{"message":"No token"}', 401);
     final res = await http.get(
       _u('/op-scan/summary/$tkId'),
       headers: _headers(token: token),
+    );
+    await _guard(res);
+    return res;
+  }
+
+  // ── Print ─────────────────────────────────────────────────
+  static Future<http.Response> printBarcode({
+    required String tkId,
+    String? opScId,
+    bool reprint = false,
+  }) async {
+    final token = await _token();
+    if (token == null) return http.Response('{"message":"No token"}', 401);
+    final bodyMap = <String, dynamic>{
+      'tk_id': tkId,
+      if (opScId != null && opScId.isNotEmpty) 'op_sc_id': opScId,
+      if (reprint) 'reprint': true,
+    };
+    final res = await http.post(
+      _u('/print/barcode'),
+      headers: _headers(token: token),
+      body: jsonEncode(bodyMap),
     );
     await _guard(res);
     return res;

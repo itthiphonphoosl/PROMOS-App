@@ -28,9 +28,29 @@ class _ParkedLotsPageState extends State<ParkedLotsPage> {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       if (res.statusCode == 200) {
         setState(() {
-          _lots = (body['parked_lots'] as List? ?? [])
+          // ✅ deduplicate by parked_lot_no — เก็บ row ที่มี transfer_id สูงสุด (ล่าสุด) เท่านั้น
+          final rawLots = (body['parked_lots'] as List? ?? [])
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList();
+          final dedupMap = <String, Map<String, dynamic>>{};
+          for (final lot in rawLots) {
+            final key =
+                lot['parked_lot_no']?.toString() ??
+                lot['to_lot_no']?.toString() ??
+                '';
+            if (key.isEmpty) continue;
+            final existing = dedupMap[key];
+            if (existing == null) {
+              dedupMap[key] = lot;
+            } else {
+              final newId =
+                  int.tryParse(lot['transfer_id']?.toString() ?? '0') ?? 0;
+              final oldId =
+                  int.tryParse(existing['transfer_id']?.toString() ?? '0') ?? 0;
+              if (newId > oldId) dedupMap[key] = lot;
+            }
+          }
+          _lots = dedupMap.values.toList();
         });
       } else if (res.statusCode == 404 ||
           body['message']?.toString().toLowerCase() == 'not found') {

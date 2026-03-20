@@ -13,30 +13,140 @@ class SummarySearchPage extends StatefulWidget {
 }
 
 class _SummarySearchPageState extends State<SummarySearchPage> {
-  final _tkCtrl = TextEditingController();
+  // เปลี่ยนจาก tk_id → รับ lot_no แทน
+  final _lotCtrl = TextEditingController();
   bool _loading = false;
 
   @override
   void dispose() {
-    _tkCtrl.dispose();
+    _lotCtrl.dispose();
     super.dispose();
   }
 
-  /// ตรวจสอบจาก API ก่อน ถ้าไม่พบ → alert อยู่หน้าเดิม ไม่เด้งไปไหน
+  /// step 1: lookup tk_id จาก lot_no
+  /// step 2: ดึง summary ด้วย tk_id ที่ได้
   Future<void> _open() async {
-    final tkId = _tkCtrl.text.trim();
-    if (tkId.isEmpty) return;
+    final lotNo = _lotCtrl.text.trim();
+    if (lotNo.isEmpty) return;
 
     setState(() => _loading = true);
     try {
-      final res = await ApiService.getSummaryByTkId(tkId);
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      // ── step 1: lot_no → tk_id ──────────────────────────────
+      final lookupRes = await ApiService.lookupTkByLotNo(lotNo);
+      final lookupBody = jsonDecode(lookupRes.body) as Map<String, dynamic>;
 
       if (!mounted) return;
 
-      if (res.statusCode == 200) {
+      if (lookupRes.statusCode != 200) {
+        // ── lookup ล้มเหลว ──
+        if (lookupRes.statusCode == 404) {
+          CoolerAlert.show(
+            context,
+            title: 'ไม่พบ Lot No.',
+            message: 'Lot No. นี้ไม่มีอยู่ในระบบ',
+            type: CoolerAlertType.warning,
+          );
+          return;
+        } else if (lookupRes.statusCode == 403) {
+          final msg = lookupBody['message']?.toString() ?? '';
+          // ✅ เช็ค parked_at_sta / parked_lot_no ที่ backend ส่งมาจริง
+          final isParked =
+              lookupBody['parked'] == true ||
+              lookupBody['parked_at_sta'] != null ||
+              lookupBody['parked_lot_no'] != null ||
+              msg.contains('ถูกพักไว้');
+
+          // parked lot → แจ้งเตือนแล้วเด้งไปหน้า summary ต่อได้เลย
+          if (isParked) {
+            final parkedSta = lookupBody['parked_at_sta']?.toString() ?? '-';
+            final tkIdParked = lookupBody['tk_id']?.toString() ?? '';
+            CoolerAlert.show(
+              context,
+              title: 'Lot ถูกพักไว้ที่ $parkedSta',
+              message: msg,
+              type: CoolerAlertType.warning,
+              duration: const Duration(seconds: 3),
+            );
+            // ดึง summary ต่อด้วย tk_id ที่ได้มา
+            if (tkIdParked.isNotEmpty) {
+              final summaryRes = await ApiService.getSummaryByTkId(tkIdParked);
+              final summaryBody =
+                  jsonDecode(summaryRes.body) as Map<String, dynamic>;
+              if (!mounted) return;
+              if (summaryRes.statusCode == 200) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SummaryPage(
+                      tkId: tkIdParked,
+                      finishResult: summaryBody,
+                    ),
+                  ),
+                );
+              }
+            }
+            return;
+          }
+
+          // กรณีอื่น (cancel / closed) → แจ้งเตือนอย่างเดียว ไม่ navigate
+          CoolerAlert.show(
+            context,
+            title: msg.contains('Cancel')
+                ? 'เอกสารถูกยกเลิก'
+                : msg.contains('เสร็จสิ้น')
+                ? 'งานเสร็จสิ้นแล้ว'
+                : 'เอกสารถูกปิดการใช้งาน',
+            message: msg.isNotEmpty
+                ? msg
+                : 'เอกสารนี้ไม่สามารถใช้งานได้ กรุณาติดต่อ Admin',
+            type: CoolerAlertType.error,
+            duration: const Duration(seconds: 2),
+          );
+          return;
+        } else {
+          CoolerAlert.show(
+            context,
+            message:
+                lookupBody['message']?.toString() ??
+                'เกิดข้อผิดพลาด กรุณาลองใหม่',
+            type: CoolerAlertType.error,
+          );
+          return;
+        }
+      }
+
+      // ✅ is_finished=true → งานเสร็จจาก STA007 → alert แล้วเด้งไป Summary
+      if (lookupBody['is_finished'] == true) {
+        final msg = lookupBody['message']?.toString() ?? 'เสร็จงานเรียบร้อย';
+        final tkIdF = lookupBody['tk_id']?.toString() ?? '';
+        CoolerAlert.show(
+          context,
+          title: 'งานเสร็จสิ้นแล้ว',
+          message: msg,
+          type: CoolerAlertType.success,
+          duration: const Duration(seconds: 2),
+        );
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted) return;
+        if (tkIdF.isNotEmpty) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => SummaryPage(tkId: tkIdF)),
+          );
+        }
+        return;
+      }
+
+      // ── step 2: ดึง summary ด้วย tk_id ที่ resolve ได้ ──────
+      final tkId = lookupBody['tk_id']?.toString() ?? '';
+      final summaryRes = await ApiService.getSummaryByTkId(tkId);
+      final summaryBody = jsonDecode(summaryRes.body) as Map<String, dynamic>;
+
+      if (!mounted) return;
+
+      if (summaryRes.statusCode == 200) {
         // เช็ค Cancel ก่อน navigate
-        if ((body['tk_status'] ?? body['detail']?['tk_status']) == 4) {
+        if (summaryBody['tk_status'] == 4) {
           CoolerAlert.show(
             context,
             title: 'เอกสารถูกยกเลิก',
@@ -44,30 +154,23 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
             type: CoolerAlertType.error,
           );
         } else {
-          // พบข้อมูล → เด้งไปหน้า Summary พร้อม pre-loaded data
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => SummaryPage(tkId: tkId, finishResult: body),
+              builder: (_) =>
+                  SummaryPage(tkId: tkId, finishResult: summaryBody),
             ),
           );
         }
       } else {
-        // error → แสดง alert อยู่หน้าเดิม ไม่เด้งไปไหนเลย
-        final rawMsg = body['message']?.toString() ?? 'เกิดข้อผิดพลาด';
-        final displayMsg = rawMsg
-            .replaceAll('tk_id', 'Tracking No.')
-            .replaceAll('not found', 'ไม่มีอยู่ในระบบ')
-            .replaceAll('Not found', 'ไม่มีอยู่ในระบบ');
+        final rawMsg = summaryBody['message']?.toString() ?? 'เกิดข้อผิดพลาด';
         CoolerAlert.show(
           context,
-          title: res.statusCode == 404
-              ? 'ไม่พบ Tracking No.'
+          title: summaryRes.statusCode == 404
+              ? 'ไม่พบข้อมูล'
               : 'เกิดข้อผิดพลาด',
-          message: res.statusCode == 404
-              ? 'Tracking No. นี้ไม่มีอยู่ในระบบ'
-              : displayMsg,
-          type: res.statusCode == 404
+          message: rawMsg,
+          type: summaryRes.statusCode == 404
               ? CoolerAlertType.warning
               : CoolerAlertType.error,
         );
@@ -90,7 +193,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
       MaterialPageRoute(builder: (_) => const _QrScannerPage()),
     );
     if (result != null && result.isNotEmpty) {
-      _tkCtrl.text = result;
+      _lotCtrl.text = result;
       _open();
     }
   }
@@ -106,11 +209,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loading
-                ? null
-                : () {
-                    _tkCtrl.clear();
-                  },
+            onPressed: _loading ? null : () => _lotCtrl.clear(),
           ),
         ],
       ),
@@ -119,7 +218,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── Search field + QR button (เหมือน Start Scan) ──
+            // ── Search field + QR button ──
             Card(
               elevation: 2,
               shape: RoundedRectangleBorder(
@@ -131,7 +230,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'สแกน / กรอก Tracking No.',
+                      'สแกน / กรอก Lot No.',
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
@@ -139,9 +238,9 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
                     ),
                     const SizedBox(height: 10),
                     TextField(
-                      controller: _tkCtrl,
+                      controller: _lotCtrl,
                       decoration: InputDecoration(
-                        hintText: 'กรุณากรอก Tracking No.',
+                        hintText: 'กรุณากรอก Lot No.',
                         prefixIcon: GestureDetector(
                           onTap: _openQrScanner,
                           child: const Icon(
@@ -209,7 +308,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// QR Scanner Page (เหมือน scan_start_page.dart ทุกอย่าง)
+// QR Scanner Page
 // ══════════════════════════════════════════════════════════════════
 class _QrScannerPage extends StatefulWidget {
   const _QrScannerPage();
@@ -245,7 +344,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Scan TK QR'),
+        title: const Text('Scan Lot No. QR'),
         actions: [
           IconButton(
             tooltip: 'สลับกล้อง',
@@ -262,7 +361,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
               width: 260,
               height: 260,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.greenAccent, width: 3),
+                border: Border.all(color: Colors.blueAccent, width: 3),
                 borderRadius: BorderRadius.circular(16),
               ),
             ),
@@ -276,7 +375,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
                 borderRadius: BorderRadius.circular(20),
               ),
               child: const Text(
-                'Align the QR code inside the box',
+                'Align the Lot No. QR inside the box',
                 style: TextStyle(color: Colors.white, fontSize: 13),
               ),
             ),
@@ -284,7 +383,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
           const Align(
             alignment: Alignment(0, 0.92),
             child: Text(
-              '( สแกน QR Code )',
+              '( สแกน Lot No. QR Code )',
               style: TextStyle(color: Colors.white70, fontSize: 13),
             ),
           ),

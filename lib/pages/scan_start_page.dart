@@ -3,6 +3,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter/material.dart';
 import '../config/api_service.dart';
 import '../widgets/cooler_alert.dart';
+import 'summary_page.dart';
 import 'scan_finish_page.dart';
 
 class ScanStartPage extends StatefulWidget {
@@ -13,12 +14,14 @@ class ScanStartPage extends StatefulWidget {
 }
 
 class _ScanStartPageState extends State<ScanStartPage> {
-  final _tkCtrl = TextEditingController();
+  // เปลี่ยนจาก tk_id → รับ lot_no แทน
+  final _lotCtrl = TextEditingController();
 
   List<Map<String, dynamic>> _machines = [];
   String? _selectedMcId;
   String? _selectedMcName;
   Map<String, dynamic>? _tkDoc;
+  String? _resolvedTkId; // tk_id จริงที่ได้จากการ lookup ด้วย lot_no
 
   bool _loadingMachines = true;
   bool _loadingTk = false;
@@ -34,7 +37,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
 
   @override
   void dispose() {
-    _tkCtrl.dispose();
+    _lotCtrl.dispose();
     super.dispose();
   }
 
@@ -73,45 +76,65 @@ class _ScanStartPageState extends State<ScanStartPage> {
     }
   }
 
-  Future<void> _lookupTk() async {
-    final tkId = _tkCtrl.text.trim();
-    if (tkId.isEmpty) return;
+  // สแกน lot_no → ค้นหา tk_id → แสดงข้อมูล TK
+  Future<void> _lookupByLot() async {
+    final lotNo = _lotCtrl.text.trim();
+    if (lotNo.isEmpty) return;
     setState(() {
       _loadingTk = true;
       _tkDoc = null;
+      _resolvedTkId = null;
     });
 
     try {
-      final res = await ApiService.getTkDocById(tkId);
+      final res = await ApiService.lookupTkByLotNo(lotNo);
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode == 200) {
-        // เช็ค Cancel (tk_status = 4) ก่อน set state
-        final tkStatus = body['detail']?['tk_status'] ?? body['tk_status'];
-        if (tkStatus == 4) {
+        // ✅ is_finished=true → งานเสร็จจาก STA007 → alert เหลือง ไม่ navigate
+        if (body['is_finished'] == true) {
+          final msg = body['message']?.toString() ?? 'เสร็จงานเรียบร้อย';
           CoolerAlert.show(
             context,
-            title: 'เอกสารถูกยกเลิก',
-            message: 'เอกสาร Tracking No. นี้ถูก Cancel ไปแล้ว',
-            type: CoolerAlertType.error,
+            title: 'งานเสร็จสิ้นแล้ว',
+            message: msg,
+            type: CoolerAlertType.warning,
+            duration: const Duration(seconds: 3),
           );
-        } else {
-          setState(() => _tkDoc = body);
+          return;
         }
+        setState(() {
+          _resolvedTkId = body['tk_id']?.toString();
+          _tkDoc = body;
+        });
       } else if (res.statusCode == 404) {
         CoolerAlert.show(
           context,
-          message: 'ไม่พบ Tracking No. นี้ในระบบ',
+          message: 'ไม่พบ Lot No. นี้ในระบบ',
           type: CoolerAlertType.warning,
         );
       } else if (res.statusCode == 403) {
+        final msg = body['message']?.toString() ?? '';
+        // ✅ เช็ค parked_at_sta หรือ parked_lot_no ที่ backend ส่งมาจริง
+        final isParked =
+            body['parked'] == true ||
+            body['parked_at_sta'] != null ||
+            body['parked_lot_no'] != null ||
+            msg.contains('ถูกพักไว้');
         CoolerAlert.show(
           context,
-          title: 'เอกสารถูกปิดการใช้งาน',
-          message:
-              body['message']?.toString() ??
-              'เอกสารนี้ถูกปิดการใช้งาน กรุณาติดต่อ Admin',
-          type: CoolerAlertType.error,
+          title: isParked
+              ? 'Lot ถูกพักไว้'
+              : msg.contains('Cancel')
+              ? 'เอกสารถูกยกเลิก'
+              : msg.contains('เสร็จสิ้น')
+              ? 'งานเสร็จสิ้นแล้ว'
+              : 'เอกสารถูกปิดการใช้งาน',
+          message: msg.isNotEmpty
+              ? msg
+              : 'เอกสารนี้ไม่สามารถใช้งานได้ กรุณาติดต่อ Admin',
+          type: CoolerAlertType.warning,
+          duration: const Duration(seconds: 3),
         );
       } else {
         CoolerAlert.show(
@@ -133,8 +156,9 @@ class _ScanStartPageState extends State<ScanStartPage> {
 
   void _reset() {
     setState(() {
-      _tkCtrl.clear();
+      _lotCtrl.clear();
       _tkDoc = null;
+      _resolvedTkId = null;
       _selectedMcId = null;
       _selectedMcName = null;
     });
@@ -147,19 +171,27 @@ class _ScanStartPageState extends State<ScanStartPage> {
       MaterialPageRoute(builder: (_) => const _QrScannerPage()),
     );
     if (result != null && result.isNotEmpty) {
-      _tkCtrl.text = result;
-      _lookupTk();
+      _lotCtrl.text = result;
+      _lookupByLot();
     }
   }
 
   Future<void> _start() async {
-    final tkId = _tkCtrl.text.trim();
-    if (tkId.isEmpty) {
-      CoolerAlert.show(
-        context,
-        message: 'กรุณากรอก Tracking No.',
-        type: CoolerAlertType.warning,
-      );
+    // ถ้ายังไม่ได้ lookup → ตรวจว่ามีข้อความในช่องหรือเปล่า
+    if (_resolvedTkId == null || _resolvedTkId!.isEmpty) {
+      final lotText = _lotCtrl.text.trim();
+      if (lotText.isEmpty) {
+        // ช่องว่างจริงๆ → บอกให้กรอก
+        CoolerAlert.show(
+          context,
+          message: 'กรุณากรอกหรือสแกน Lot No. ก่อนเริ่มงาน',
+          type: CoolerAlertType.warning,
+        );
+        return;
+      }
+      // มีข้อความแต่ยังไม่ได้กดค้นหา → auto lookup แล้วหยุดรอ
+      // (หลัง lookup สำเร็จ user กด Start อีกครั้งได้เลย)
+      await _lookupByLot();
       return;
     }
     if (_selectedMcId == null) {
@@ -173,7 +205,10 @@ class _ScanStartPageState extends State<ScanStartPage> {
 
     setState(() => _starting = true);
     try {
-      final res = await ApiService.startScan(tkId: tkId, mcId: _selectedMcId!);
+      final res = await ApiService.startScan(
+        tkId: _resolvedTkId!,
+        mcId: _selectedMcId!,
+      );
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
       if (res.statusCode == 201) {
@@ -193,7 +228,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
           MaterialPageRoute(
             builder: (_) => ScanFinishPage(
               opScId: body['op_sc_id']?.toString() ?? '',
-              tkId: tkId,
+              tkId: _resolvedTkId!,
               tkDoc: body['tk_doc'] as Map<String, dynamic>? ?? {},
               allLots:
                   (body['current_lots'] as List?)
@@ -203,9 +238,25 @@ class _ScanStartPageState extends State<ScanStartPage> {
             ),
           ),
         );
+      } else if (res.statusCode == 409) {
+        // มีคนเริ่มงานนี้ไปแล้ว → แสดงชื่อ + station
+        final lockedBy = body['locked_by'] as Map<String, dynamic>? ?? {};
+        final lockerName = lockedBy['name']?.toString() ?? 'ผู้ใช้อื่น';
+        final lockerSta = lockedBy['op_sta_id']?.toString();
+        final lockerStaName = lockedBy['op_sta_name']?.toString();
+        final staLabel = lockerSta != null
+            ? '$lockerSta${lockerStaName != null ? " ($lockerStaName)" : ""}'
+            : '-';
+        CoolerAlert.show(
+          context,
+          title: 'งานนี้กำลังถูกทำอยู่',
+          message:
+              'ผู้ทำงาน: $lockerName\nStation: $staLabel\n\nกรุณารอให้เสร็จก่อน',
+          type: CoolerAlertType.warning,
+          duration: const Duration(seconds: 3),
+        );
       } else {
         final rawMsg = body['message']?.toString() ?? 'Start ไม่สำเร็จ';
-        // [FIX] key เปลี่ยนจาก next_sta → suggested_next_sta
         final nextSta = body['suggested_next_sta']?.toString();
         final nextStaName = body['suggested_next_sta_name']?.toString();
 
@@ -222,8 +273,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
           title: 'ไม่สามารถเริ่มงานได้',
           message: display,
           type: CoolerAlertType.error,
-          // 5 วิเฉพาะมี next station ให้อ่าน, ปกติใช้ default 1 วิ
-          duration: const Duration(seconds: 2),
+          duration: const Duration(seconds: 3),
         );
       }
     } catch (_) {
@@ -286,7 +336,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
               ),
             const SizedBox(height: 16),
 
-            // TK ID Input
+            // Lot No. Input
             Card(
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12),
@@ -297,7 +347,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'สแกน / กรอก Tracking No.',
+                      'สแกน / กรอก Lot No.',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 15,
@@ -308,9 +358,9 @@ class _ScanStartPageState extends State<ScanStartPage> {
                       children: [
                         Expanded(
                           child: TextField(
-                            controller: _tkCtrl,
+                            controller: _lotCtrl,
                             decoration: InputDecoration(
-                              hintText: 'กรุณากรอก Tracking No.',
+                              hintText: 'กรุณากรอก Lot No.',
                               prefixIcon: GestureDetector(
                                 onTap: _openQrScanner,
                                 child: const Tooltip(
@@ -324,12 +374,12 @@ class _ScanStartPageState extends State<ScanStartPage> {
                               border: const OutlineInputBorder(),
                             ),
                             textCapitalization: TextCapitalization.characters,
-                            onSubmitted: (_) => _lookupTk(),
+                            onSubmitted: (_) => _lookupByLot(),
                           ),
                         ),
                         const SizedBox(width: 8),
                         IconButton.filled(
-                          onPressed: _loadingTk ? null : _lookupTk,
+                          onPressed: _loadingTk ? null : _lookupByLot,
                           icon: _loadingTk
                               ? const SizedBox(
                                   height: 20,
@@ -359,6 +409,7 @@ class _ScanStartPageState extends State<ScanStartPage> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            _Row('TK ID', _resolvedTkId ?? '-', bold: true),
                             _Row(
                               'Part No',
                               _tkDoc!['detail']?['part_no']?.toString() ?? '-',
@@ -370,9 +421,16 @@ class _ScanStartPageState extends State<ScanStartPage> {
                             ),
                             _Row(
                               'Lot No',
-                              _tkDoc!['lot_no']?.toString() ?? '-',
+                              _tkDoc!['detail']?['lot_no']?.toString() ?? '-',
                             ),
                             _Row('Status', _statusLabel(_tkDoc!['tk_status'])),
+                            // station ล่าสุดที่ finish
+                            if (_tkDoc!['last_finished_sta'] != null)
+                              _Row(
+                                'Last STA',
+                                '${_tkDoc!['last_finished_sta']} '
+                                    '${_tkDoc!['last_finished_sta_name'] != null ? '(${_tkDoc!['last_finished_sta_name']})' : ''}',
+                              ),
                           ],
                         ),
                       ),
@@ -528,7 +586,8 @@ class _ScanStartPageState extends State<ScanStartPage> {
 class _Row extends StatelessWidget {
   final String label;
   final String value;
-  const _Row(this.label, this.value);
+  final bool bold;
+  const _Row(this.label, this.value, {this.bold = false});
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -546,7 +605,11 @@ class _Row extends StatelessWidget {
         Expanded(
           child: Text(
             value,
-            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+              fontSize: 13,
+              color: bold ? Colors.indigo : null,
+            ),
           ),
         ),
       ],
@@ -591,7 +654,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Scan TK QR'),
+        title: const Text('Scan Lot No. QR'),
         actions: [
           IconButton(
             tooltip: 'สลับกล้อง',

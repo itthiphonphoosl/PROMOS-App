@@ -98,10 +98,22 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
   }
 
   Future<void> _loadCurrentLotsFromSummary() async {
+    // ✅ ย้ายออกมาก่อน try เพื่อให้ fallback setState ใช้ได้
+    final passedLots =
+        widget.allLots
+            .map((x) => (x['lot_no']?.toString() ?? '').trim())
+            .where((s) => s.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+
     try {
       final res = await ApiService.getSummaryByTkId(widget.tkId);
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
+      if (passedLots.isNotEmpty) {
+        _baseLotNo ??= passedLots.first;
+      }
       if (res.statusCode == 200) {
         // 1) base lot
         final baseLotNoDirect = (body['base_lot_no']?.toString() ?? '').trim();
@@ -200,7 +212,28 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         // 5) ✅ default part_no — เอาแค่ part_no จริงๆ ไม่เอา lot number
         //    ลำดับ: out_part_no จาก transfer ล่าสุด → current.part_no → tkDoc.part_no
         //    ✅ _hasTransferHistory = เคย transfer มาแล้ว (tf_rs_code != 0 / transfers ไม่ว่าง)
-        final hasTransferHistory = transfers.isNotEmpty;
+        // ✅ build activeLots จาก incoming_lots (active เท่านั้น)
+        //    ถ้า hasTransferHistory ให้ใช้ incoming_lots แทน passedLots
+        //    เพราะ passedLots มีแค่ lot ที่ scan มา (1 lot)
+        final activeLots =
+            (body['incoming_lots'] as List? ?? [])
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .where((il) {
+                  final ps = il['lot_parked_status'];
+                  if (ps == null) return true;
+                  if (ps is bool) return !ps;
+                  return int.tryParse(ps.toString()) != 1;
+                })
+                .map((il) => (il['lot_no']?.toString() ?? '').trim())
+                .where((s) => s.isNotEmpty)
+                .toSet()
+                .toList()
+              ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+
+        // ✅ ใช้ last_finished_op_sc_id หรือ activeLots > 1 แทน transfers
+        //    เพราะ summary API ไม่มี top-level "transfers" key
+        final hasTransferHistory =
+            body['last_finished_op_sc_id'] != null || activeLots.length > 1;
 
         String? lastPartNo;
         if (hasTransferHistory) {
@@ -248,9 +281,19 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
         if (!mounted) return;
         setState(() {
-          _currentLots = leaf.isNotEmpty
-              ? leaf
-              : (_baseLotNo != null ? [_baseLotNo!] : []);
+          // ✅ hasTransferHistory → ใช้ activeLots จาก incoming_lots (ครบทุก lot)
+          //    ยังไม่เคย transfer → ใช้ passedLots (lot ที่ scan มา)
+          _currentLots = hasTransferHistory
+              ? (activeLots.isNotEmpty
+                    ? activeLots
+                    : (passedLots.isNotEmpty
+                          ? passedLots
+                          : (_baseLotNo != null ? [_baseLotNo!] : [])))
+              : (passedLots.isNotEmpty
+                    ? passedLots
+                    : (activeLots.isNotEmpty
+                          ? activeLots
+                          : (_baseLotNo != null ? [_baseLotNo!] : [])));
           _parkedLots = parkedFromSummary;
           _crossTkLotMap = crossTkMap;
           _crossTkParkedLots = crossTkParkedList;
@@ -265,8 +308,12 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
     if (!mounted) return;
     setState(() {
-      _baseLotNo ??= _pickBaseLotFromAllLots();
-      _currentLots = _baseLotNo != null ? [_baseLotNo!] : [];
+      _baseLotNo ??= passedLots.isNotEmpty
+          ? passedLots.first
+          : _pickBaseLotFromAllLots();
+      _currentLots = passedLots.isNotEmpty
+          ? passedLots
+          : (_baseLotNo != null ? [_baseLotNo!] : []);
       _parkedLots = [];
       _crossTkLotMap = {};
       _crossTkParkedLots = [];
@@ -1000,16 +1047,46 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             '🔵 Auto-พัก $autoParkedCount lot (ไม่ได้ใช้งาน)',
         ].join('\n');
 
+        // ✅ Auto-print หลัง finish: ปริ้นเฉพาะ lot ใหม่ของ scan นี้ (from≠to)
+        String printMsg = '';
+        try {
+          final printRes = await ApiService.printBarcode(
+            tkId: widget.tkId,
+            opScId: widget.opScId,
+          );
+          final printBody = jsonDecode(printRes.body) as Map<String, dynamic>;
+          if (printRes.statusCode == 200 && printBody['ok'] == true) {
+            final printed = printBody['printed'] as int? ?? 0;
+            final lots = (printBody['printed_lots'] as List? ?? [])
+                .map((e) => (e as Map)['lot_no']?.toString() ?? '')
+                .where((s) => s.isNotEmpty)
+                .toList();
+            final lotLines = lots
+                .map((l) {
+                  final parts = l.split('-');
+                  return '• $l';
+                })
+                .join('\n');
+            printMsg = printed > 0
+                ? '\n\n🖨 ปริ้น $printed ใบสำเร็จ\n$lotLines'
+                : '\n\n🖨 ไม่มีใบใหม่ที่ต้องปริ้น';
+          } else {
+            printMsg = '\n\n⚠ ปริ้นไม่สำเร็จ: ${printBody["message"] ?? ""}';
+          }
+        } catch (_) {
+          printMsg = '\n\n⚠ เชื่อมต่อเครื่องปริ้นไม่ได้';
+        }
+
         CoolerAlert.show(
           context,
           title: isFinished
               ? 'Finish Station สุดท้ายสำเร็จ!'
               : 'Finish สำเร็จ!',
-          message: msgLines,
+          message: msgLines + printMsg,
           type: CoolerAlertType.success,
-          duration: const Duration(seconds: 1),
+          duration: const Duration(seconds: 4),
         );
-        await Future.delayed(const Duration(seconds: 2));
+        await Future.delayed(const Duration(seconds: 3));
         if (!mounted) return;
         Navigator.pushAndRemoveUntil(
           context,
@@ -1048,7 +1125,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     final isOver = remain < 0;
     final isExact = remain == 0 && good > 0;
 
-    // Per-group park preview (tf=2 only)
+    // Per-group park preview (tf=2 only) — แสดงทุก group: ครบ ✅ หรือ พัก 🔵
     final groupParkLines = <String>[];
     for (int i = 0; i < _groups.length; i++) {
       final g = _groups[i];
@@ -1062,7 +1139,11 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       final diff = gQty - splitSum;
       if (diff > 0) {
         groupParkLines.add(
-          'Group ${i + 1}: Split รวม $splitSum / $gQty  →  จะพัก $diff ชิ้น',
+          'Group ${i + 1}: Split รวม ${_fmt(splitSum)} / ${_fmt(gQty)}  →  🔵 จะพัก ${_fmt(diff)} ชิ้น',
+        );
+      } else if (gQty > 0 && diff == 0) {
+        groupParkLines.add(
+          'Group ${i + 1}: Split รวม ${_fmt(splitSum)} / ${_fmt(gQty)}  →  ✅ ครบพอดี ไม่พัก',
         );
       }
     }
@@ -1098,12 +1179,12 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Total qty (OK + NG) = ${_fmt(total)}',
+            'จำนวนรวมของ ( OK+NG ) = ${_fmt(total)}',
             style: const TextStyle(fontSize: 12),
           ),
           const SizedBox(height: 4),
           Text(
-            'Sum Group qty = ${_fmt(sumGrp)}  (ต้องเท่ากับ จำนวน OK = ${_fmt(good)})',
+            'จำนวนรวมของทุก Group = ${_fmt(sumGrp)}  (ต้องเท่ากับ จำนวน OK = ${_fmt(good)})',
             style: const TextStyle(fontSize: 12),
           ),
           const SizedBox(height: 4),
@@ -1112,8 +1193,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 ? '⚠️ รวมทุก Group (${_fmt(sumGrp)} ชิ้น) เกิน จำนวน OK (${_fmt(good)} ชิ้น)'
                 : isExact && groupParkLines.isEmpty
                 ? '✅ รวมทุก Group ครบพอดีกับจำนวน OK (${_fmt(good)} ชิ้น)'
-                : hasSplitGroup
-                ? '🔵 Split Group จะพักส่วนที่เหลือจาก จำนวน OK (${_fmt(good)} ชิ้น) อัตโนมัติ'
                 : remain > 0
                 ? '⚠️ รวมทุก Group ได้ (${_fmt(sumGrp)} ชิ้น) ยังขาดอีก ${_fmt(remain)} ชิ้น จาก OK (${_fmt(good)} ชิ้น)'
                 : '✅ รวมทุก Group ครบพอดีกับจำนวน OK (${_fmt(good)} ชิ้น)',
@@ -1169,7 +1248,8 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     final lots = _currentLots;
     // [FIX] ให้เพิ่ม Group ได้เลยถ้ามี lot มากกว่า 1
     // ไม่ต้องรอกรอก good_qty ก่อน — validate ที่ปุ่ม Finish แทน
-    final canAddGroup = !_isSimpleFlow;
+    // ✅ เพิ่ม Group ได้เสมอ — _canCoId ใน _GroupCard ดูแล validate เงื่อนไขแต่ละ group อยู่แล้ว
+    final canAddGroup = !_isFirstScan && lots.length > 1;
     final isQtyFull = _goodQty() > 0 && _remainingGood() <= 0;
     final parkedLotNos = _parkedLots
         .map((pl) => pl['parked_lot_no']?.toString() ?? '')
@@ -1277,118 +1357,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                           ),
                         ),
                       ],
-                    ),
-                    // indicator
-                    Builder(
-                      builder: (ctx) {
-                        final g =
-                            (int.tryParse(
-                                      _goodCtrl.text.trim().replaceAll(',', ''),
-                                    ) ??
-                                    0)
-                                .abs();
-                        final s =
-                            (int.tryParse(
-                                      _scrapCtrl.text.trim().replaceAll(
-                                        ',',
-                                        '',
-                                      ),
-                                    ) ??
-                                    0)
-                                .abs();
-                        final total = g + s;
-                        final sumGrp = _groups.fold(
-                          0,
-                          (a, x) =>
-                              a +
-                              ((int.tryParse(
-                                        x.qtyCtrl.text.trim().replaceAll(
-                                          ',',
-                                          '',
-                                        ),
-                                      ) ??
-                                      0)
-                                  .abs()),
-                        );
-                        final remain = g - sumGrp;
-
-                        // แสดง indicator เฉพาะเมื่อมี group มากกว่า 1
-                        if (_groups.length <= 1) return const SizedBox.shrink();
-
-                        if (total <= 0 && sumGrp <= 0)
-                          return const SizedBox.shrink();
-
-                        final isOver = remain < 0;
-                        final hasSplit = _groups.any((g) => g.tfRsCode == 2);
-                        final isParked = remain > 0 && hasSplit;
-                        final isShort = remain > 0 && !hasSplit;
-
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 10),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            decoration: BoxDecoration(
-                              color: isOver
-                                  ? Colors.red.shade50
-                                  : isShort
-                                  ? Colors.orange.shade50
-                                  : isParked
-                                  ? Colors.blue.shade50
-                                  : Colors.green.shade50,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: isOver
-                                    ? Colors.red.shade200
-                                    : isShort
-                                    ? Colors.orange.shade200
-                                    : isParked
-                                    ? Colors.blue.shade200
-                                    : Colors.green.shade200,
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Total qty (OK + NG) = ${_fmt(total)}',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  hasSplit
-                                      ? 'Sum Group qty = ${_fmt(sumGrp)}  (ต้องไม่เกิน จำนวน OK = ${_fmt(g)})'
-                                      : 'Sum Group qty = ${_fmt(sumGrp)}  (ต้องเท่ากับ จำนวน OK = ${_fmt(g)})',
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  isOver
-                                      ? '⚠️ เกิน จำนวน OK ${_fmt(remain.abs())} ชิ้น'
-                                      : isShort
-                                      ? '⚠️ ยังขาดอีก ${_fmt(remain)} ชิ้น (ต้องครบ ${_fmt(g)})'
-                                      : isParked
-                                      ? '🔵 จะพักอัตโนมัติ ${_fmt(remain)} ชิ้น'
-                                      : '✅ ครบพอดี',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: isOver
-                                        ? Colors.red.shade800
-                                        : isShort
-                                        ? Colors.orange.shade800
-                                        : isParked
-                                        ? Colors.blue.shade800
-                                        : Colors.green.shade800,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
                     ),
                   ],
                 ),
@@ -1629,17 +1597,18 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
               );
             }),
 
-            OutlinedButton.icon(
-              onPressed: canAddGroup ? _addGroup : null,
-              icon: const Icon(Icons.add),
-              label: Text(
-                isQtyFull ? 'เพิ่ม Group (qty ครบแล้ว)' : 'เพิ่ม Group',
+            if (canAddGroup)
+              OutlinedButton.icon(
+                onPressed: _addGroup,
+                icon: const Icon(Icons.add),
+                label: Text(
+                  isQtyFull ? 'เพิ่ม Group (qty ครบแล้ว)' : 'เพิ่ม Group',
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.orange),
+                  foregroundColor: Colors.orange,
+                ),
               ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.orange),
-                foregroundColor: Colors.orange,
-              ),
-            ),
             const SizedBox(height: 16),
 
             // ── Pre-Finish Summary (ก่อนกด Finish) ──
@@ -2248,12 +2217,7 @@ class _GroupCardState extends State<_GroupCard> {
                                     ),
                                   );
                                 }).toList(),
-                            itemHeight:
-                                widget.crossTkLotMap.keys.any(
-                                  (k) => widget.availableLots.contains(k),
-                                )
-                                ? 56.0
-                                : 48.0,
+                            itemHeight: null,
                             items: widget.availableLots
                                 .map(
                                   (l) => _buildLotDropdownItem(
@@ -3164,7 +3128,6 @@ class _MergeLotRow extends StatelessWidget {
           ),
         ),
         Expanded(
-          flex: 2,
           child: DropdownButtonFormField<String>(
             value: entry.fromLotNo,
             isExpanded: true,
@@ -3192,9 +3155,7 @@ class _MergeLotRow extends StatelessWidget {
                 ),
               );
             }).toList(),
-            itemHeight: crossTkLotMap.keys.any((k) => availableLots.contains(k))
-                ? 56.0
-                : 48.0,
+            itemHeight: null,
             items: availableLots.map((l) {
               final sourceTk = crossTkLotMap[l];
               return DropdownMenuItem<String>(
@@ -3252,8 +3213,8 @@ class _MergeLotRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        Expanded(
-          flex: 1,
+        SizedBox(
+          width: 80,
           child: TextField(
             controller: entry.qtyCtrl,
             keyboardType: TextInputType.number,

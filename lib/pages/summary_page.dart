@@ -88,7 +88,11 @@ class _SummaryPageState extends State<SummaryPage> {
   }
 
   String _tfLabel(dynamic code) {
-    final c = int.tryParse(code?.toString() ?? '') ?? 0;
+    final s = code?.toString().trim() ?? '';
+    if (s == 'Master-ID' || s == 'Master') return 'Master';
+    if (s == 'Split-ID' || s == 'Split') return 'Split';
+    if (s == 'Co-ID') return 'Co-ID';
+    final c = int.tryParse(s) ?? 0;
     switch (c) {
       case 1:
         return 'Master';
@@ -112,20 +116,58 @@ class _SummaryPageState extends State<SummaryPage> {
   }
 
   /// ดึง list scans จาก payload
+  /// รองรับทั้ง stations_history (backend ใหม่) และ flat scans (เก่า)
   List<Map<String, dynamic>> _scans() {
-    final s = _data?['scans'];
-    if (s is List) {
-      return s.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final sh = _data?['stations_history'];
+    if (sh is List && sh.isNotEmpty) {
+      final result = <Map<String, dynamic>>[];
+      for (final sta in sh) {
+        final staId = sta['op_sta_id']?.toString() ?? '';
+        final staName = sta['op_sta_name']?.toString() ?? '';
+        final s = sta['scans'];
+        if (s is List) {
+          for (final raw in s) {
+            final scan = Map<String, dynamic>.from(raw as Map);
+            // inject station info จาก parent ถ้า scan ยังไม่มี
+            scan['op_sta_id'] ??= staId;
+            scan['op_sta_name'] ??= staName;
+            // inject tf_rs_name เป็น tf_rs_code fallback ให้ _tfLabel ทำงานได้
+            if (scan['tf_rs_code'] == null && scan['tf_rs_name'] != null) {
+              scan['tf_rs_code'] = scan['tf_rs_name'];
+            }
+            result.add(scan);
+          }
+        }
+      }
+      return result;
     }
+    final s = _data?['scans'];
+    if (s is List)
+      return s.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     return [];
   }
 
   /// ดึง list transfers จาก payload
+  /// รองรับทั้ง nested ใน scans (backend ใหม่) และ flat transfers (เก่า)
   List<Map<String, dynamic>> _transfers() {
-    final t = _data?['transfers'];
-    if (t is List) {
-      return t.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final sh = _data?['stations_history'];
+    if (sh is List && sh.isNotEmpty) {
+      final result = <Map<String, dynamic>>[];
+      for (final sta in sh) {
+        final scans = sta['scans'];
+        if (scans is List) {
+          for (final scan in scans) {
+            final t = scan['transfers'];
+            if (t is List)
+              result.addAll(t.map((e) => Map<String, dynamic>.from(e as Map)));
+          }
+        }
+      }
+      if (result.isNotEmpty) return result;
     }
+    final t = _data?['transfers'];
+    if (t is List)
+      return t.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     return [];
   }
 
@@ -211,7 +253,7 @@ class _SummaryPageState extends State<SummaryPage> {
                     'Machine',
                     '${scan['MC_id'] ?? '-'} • ${scan['MC_name'] ?? '-'}',
                   ),
-                  _kv('Type', _tfLabel(scan['tf_rs_code'])),
+                  _kv('Condition', _tfLabel(scan['tf_rs_code'])),
                   _kv(
                     'OK / NG',
                     '${scan['op_sc_good_qty'] ?? 0} / ${scan['op_sc_scrap_qty'] ?? 0}',
@@ -236,144 +278,256 @@ class _SummaryPageState extends State<SummaryPage> {
                       style: TextStyle(color: Colors.grey),
                     )
                   else
-                    ...trs.map((t) {
-                      final tf = _tfLabel(t['tf_rs_code']);
-                      final fromLot = t['from_lot_no']?.toString() ?? '-';
-                      final toLot = t['to_lot_no']?.toString() ?? '-';
-                      final qty = t['transfer_qty']?.toString() ?? '0';
-                      final ts = _fmtTs(t['transfer_ts']?.toString());
-                      final fromTk = t['from_tk_id']?.toString() ?? '';
-                      final toTk = t['to_tk_id']?.toString() ?? '';
+                    ...() {
+                      // ✅ build transfer cards พร้อม separator แดงก่อน lot "ไม่ได้ใช้" ตัวแรก
+                      final result = <Widget>[];
+                      bool separatorInserted = false;
 
-                      // ✅ color info (STA006)
-                      final colorId = t['color_id'];
-                      final colorNo = t['color_no']?.toString() ?? '';
-                      final colorName = t['color_name']?.toString() ?? '';
-                      final hasColor = colorId != null && colorNo.isNotEmpty;
+                      for (final t in trs) {
+                        final tf = _tfLabel(t['tf_rs_code']);
+                        final fromLot = t['from_lot_no']?.toString() ?? '-';
+                        final toLot = t['to_lot_no']?.toString() ?? '-';
+                        final qty = t['transfer_qty']?.toString() ?? '0';
+                        final ts = _fmtTs(t['transfer_ts']?.toString());
+                        final fromTk = t['from_tk_id']?.toString() ?? '';
+                        final toTk = t['to_tk_id']?.toString() ?? '';
 
-                      // lot_parked_status=1 → lot นี้ถูก mark พักไว้
-                      // BIT column → JSON อาจส่งมาเป็น true/false หรือ 1/0
-                      final _ps = t['lot_parked_status'];
-                      final isParked =
-                          _ps == true ||
-                          _ps == 1 ||
-                          _ps?.toString() == '1' ||
-                          _ps?.toString() == 'true';
+                        // ✅ color info (STA006)
+                        final colorId = t['color_id'];
+                        final colorNo = t['color_no']?.toString() ?? '';
+                        final colorName = t['color_name']?.toString() ?? '';
+                        final hasColor = colorId != null && colorNo.isNotEmpty;
 
-                      // ✅ เช็ค station — แสดง badge เฉพาะ lot ที่พักใน station ของ scan นี้
-                      final scanStaId = scan['op_sta_id']?.toString() ?? '';
-                      final tStaId = t['op_sta_id']?.toString() ?? '';
-                      final isParkedHere = isParked && tStaId == scanStaId;
+                        // lot_parked_status=1 → lot นี้ถูก mark พักไว้
+                        final _ps = t['lot_parked_status'];
+                        final isParked =
+                            _ps == true ||
+                            _ps == 1 ||
+                            _ps?.toString() == '1' ||
+                            _ps?.toString() == 'true';
 
-                      // from_tk ≠ to_tk → TK นี้ดึง lot พักจาก TK อื่นมาใช้ (Co-ID cross-TK)
-                      final isCrossTk =
-                          fromTk.isNotEmpty &&
-                          toTk.isNotEmpty &&
-                          fromTk != toTk;
+                        // ✅ เช็ค station
+                        final scanStaId = scan['op_sta_id']?.toString() ?? '';
+                        final tStaId = t['op_sta_id']?.toString() ?? '';
+                        final isParkedHere = isParked && tStaId == scanStaId;
 
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
+                        // from_tk ≠ to_tk → cross-TK
+                        final isCrossTk =
+                            fromTk.isNotEmpty &&
+                            toTk.isNotEmpty &&
+                            fromTk != toTk;
+
+                        // ✅ isAutoParked: lot ไม่ถูกเลือกใช้เลยใน scan นี้
+                        final usedAsSource = trs.any(
+                          (other) =>
+                              (other['from_lot_no']?.toString() ?? '') ==
+                                  toLot &&
+                              other != t &&
+                              _toInt01(other['lot_parked_status']) == 0,
+                        );
+                        final fromLotActivelyUsed = trs.any(
+                          (other) =>
+                              (other['from_lot_no']?.toString() ?? '') ==
+                                  fromLot &&
+                              other != t &&
+                              _toInt01(other['lot_parked_status']) == 0,
+                        );
+                        final isAutoParked =
+                            isParked &&
+                            !isCrossTk &&
+                            !usedAsSource &&
+                            !fromLotActivelyUsed;
+
+                        // ✅ แทรกเส้นแดงคั่นก่อน lot ไม่ได้ใช้ตัวแรก
+                        if (isAutoParked && !separatorInserted) {
+                          separatorInserted = true;
+                          result.add(
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Row(
                                 children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 4,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blueGrey.shade50,
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      tf,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                      ),
+                                  Expanded(
+                                    child: Divider(
+                                      thickness: 1.5,
+                                      color: Colors.red.shade200,
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
-                                  // badge ส้ม: lot_parked_status=1 — lot พักของ TK นี้ (เฉพาะ station นี้)
-                                  if (isParkedHere && !isCrossTk)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.orange.shade50,
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(
-                                          color: Colors.orange.shade300,
-                                        ),
-                                      ),
-                                      child: Text(
-                                        fromTk.isNotEmpty
-                                            ? '🔵 Lot พักของ $fromTk'
-                                            : '🔵 Lot พัก',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.orange.shade700,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
                                     ),
-                                  // badge เขียว: ดึง lot พักจาก TK อื่นมาใช้
-                                  if (isCrossTk)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 3,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.green.shade50,
-                                        borderRadius: BorderRadius.circular(20),
-                                        border: Border.all(
-                                          color: Colors.green.shade300,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          Icons.warning_amber_rounded,
+                                          size: 12,
+                                          color: Colors.red.shade400,
                                         ),
-                                      ),
-                                      child: Text(
-                                        '✅ นำ lot พักมาใช้จาก $fromTk',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.green.shade700,
-                                          fontWeight: FontWeight.w600,
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Lot ไม่ได้ใช้ใน scan นี้ ต้องนำไป Co-ID ก่อน',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.red.shade400,
+                                            fontStyle: FontStyle.italic,
+                                          ),
                                         ),
-                                      ),
+                                      ],
                                     ),
-                                  const Spacer(),
-                                  Text(
-                                    'Qty: $qty',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
+                                  ),
+                                  Expanded(
+                                    child: Divider(
+                                      thickness: 1.5,
+                                      color: Colors.red.shade200,
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 8),
-                              _kvSmall('From', fromLot),
-                              _kvSmall('To', toLot),
-                              // ✅ แสดงสีเฉพาะ row ที่มี color_id (STA006)
-                              if (hasColor)
-                                _kvSmall(
-                                  '🎨 สี',
-                                  colorName.isNotEmpty
-                                      ? '$colorNo  •  $colorName'
-                                      : colorNo,
-                                ),
-                              _kvSmall('Time', ts),
-                            ],
+                            ),
+                          );
+                        }
+
+                        final card = Card(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
                           ),
-                        ),
-                      );
-                    }),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    // ✅ isAutoParked → badge แดง "ไม่ได้ใช้" แทน Condition chip
+                                    if (isAutoParked)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.red.shade300,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '🔴 ไม่ได้ใช้',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 12,
+                                            color: Colors.red.shade700,
+                                          ),
+                                        ),
+                                      )
+                                    else
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.blueGrey.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          tf,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    const SizedBox(width: 6),
+                                    // badge ส้ม: lot พักปกติ (ไม่ใช่ auto-park)
+                                    if (isParkedHere &&
+                                        !isCrossTk &&
+                                        !isAutoParked)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.orange.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.orange.shade300,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          fromTk.isNotEmpty
+                                              ? '🔵 Lot พักของ $fromTk'
+                                              : '🔵 Lot พัก',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.orange.shade700,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    // badge เขียว: ดึง lot พักจาก TK อื่นมาใช้
+                                    if (isCrossTk)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 3,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.green.shade50,
+                                          borderRadius: BorderRadius.circular(
+                                            20,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.green.shade300,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '✅ นำ lot พักมาใช้จาก $fromTk',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: Colors.green.shade700,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    const Spacer(),
+                                    Text(
+                                      'Qty: $qty',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                _kvSmall('From', fromLot),
+                                _kvSmall('To', toLot),
+                                // ✅ แสดงสีเฉพาะ row ที่มี color_id (STA006)
+                                if (hasColor)
+                                  _kvSmall(
+                                    '🎨 สี',
+                                    colorName.isNotEmpty
+                                        ? '$colorNo  •  $colorName'
+                                        : colorNo,
+                                  ),
+                                _kvSmall('Time', ts),
+                              ],
+                            ),
+                          ),
+                        );
+                        result.add(card);
+                      }
+                      return result;
+                    }(),
                 ],
               ),
             ),
@@ -483,7 +637,15 @@ class _SummaryPageState extends State<SummaryPage> {
                             'Part Name',
                             current['part_name']?.toString() ?? '-',
                           ),
-                          _kv('Lot No', _motherLotFromPayload()),
+                          _kv(
+                            'Lot No',
+                            // ✅ ใช้ base.lot_no จาก backend โดยตรง (lot แรกของเอกสาร)
+                            // fallback → _motherLotFromPayload() กรณี finishResult ยังไม่มี base
+                            (_data?['base']?['lot_no']?.toString() ?? '')
+                                    .isNotEmpty
+                                ? _data!['base']['lot_no'].toString()
+                                : _motherLotFromPayload(),
+                          ),
                           _kv(
                             'Current Station',
                             current['op_sta_id']?.toString() ?? '-',
