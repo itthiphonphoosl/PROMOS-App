@@ -60,10 +60,15 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
           if (isParked) {
             final parkedSta = lookupBody['parked_at_sta']?.toString() ?? '-';
             final tkIdParked = lookupBody['tk_id']?.toString() ?? '';
+            // ตัด "ยังไม่สามารถเริ่มงานได้" ออก — หน้า summary ดูข้อมูลเท่านั้น ไม่ได้ start งาน
+            final displayMsg = msg
+                .replaceAll(' ยังไม่สามารถเริ่มงานได้', '')
+                .replaceAll('ยังไม่สามารถเริ่มงานได้', '')
+                .trim();
             CoolerAlert.show(
               context,
               title: 'Lot ถูกพักไว้ที่ $parkedSta',
-              message: msg,
+              message: displayMsg,
               type: CoolerAlertType.warning,
               duration: const Duration(seconds: 3),
             );

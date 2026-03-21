@@ -318,6 +318,18 @@ class _SummaryPageState extends State<SummaryPage> {
                             fromTk != toTk;
 
                         // ✅ isAutoParked: lot ไม่ถูกเลือกใช้เลยใน scan นี้
+                        //
+                        // กรณี 1 — split ไม่ครบ: backend gen lot ใหม่ → from_lot ≠ to_lot เสมอ
+                        //           (e.g. from=lot1, to=lot4_new) → isAutoParked=false → ORANGE
+                        //
+                        // กรณี 2 — lot ไม่ถูกเลือก (auto-park): backend INSERT row ใหม่
+                        //           from_lot == to_lot (same lot) → isAutoParked=true → RED
+                        //
+                        // ✅ isSameLot: from_lot == to_lot → ต้องเป็น case 2 เสมอ (ไม่ว่า backend เก่าหรือใหม่)
+                        //    รองรับทั้ง backend เก่า (ที่ UPDATE row เดิมผิด) และ backend ใหม่ (INSERT-only)
+                        final isSameLot =
+                            fromLot.isNotEmpty && fromLot == toLot;
+
                         final usedAsSource = trs.any(
                           (other) =>
                               (other['from_lot_no']?.toString() ?? '') ==
@@ -335,8 +347,10 @@ class _SummaryPageState extends State<SummaryPage> {
                         final isAutoParked =
                             isParked &&
                             !isCrossTk &&
-                            !usedAsSource &&
-                            !fromLotActivelyUsed;
+                            // from==to → case 2 auto-park แน่นอน (bypass usedAsSource check)
+                            // from≠to → ใช้ usedAsSource / fromLotActivelyUsed ตามปกติ
+                            (isSameLot ||
+                                (!usedAsSource && !fromLotActivelyUsed));
 
                         // ✅ แทรกเส้นแดงคั่นก่อน lot ไม่ได้ใช้ตัวแรก
                         if (isAutoParked && !separatorInserted) {

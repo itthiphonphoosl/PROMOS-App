@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="promos_app"
+        android:label="PROMOS APP"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

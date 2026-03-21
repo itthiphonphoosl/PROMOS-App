@@ -121,18 +121,39 @@ class _ScanStartPageState extends State<ScanStartPage> {
             body['parked_at_sta'] != null ||
             body['parked_lot_no'] != null ||
             msg.contains('ถูกพักไว้');
-        CoolerAlert.show(
-          context,
-          title: isParked
-              ? 'Lot ถูกพักไว้'
-              : msg.contains('Cancel')
+        // สร้าง title + message แยกกันตามประเภท
+        String alertTitle;
+        String alertMsg;
+        if (isParked) {
+          final parkedSta = body['parked_at_sta']?.toString() ?? '';
+          final parkedStaName = body['parked_at_sta_name']?.toString() ?? '';
+          final staLabel = parkedStaName.isNotEmpty
+              ? '$parkedSta ($parkedStaName)'
+              : parkedSta.isNotEmpty
+              ? parkedSta
+              : '-';
+          alertTitle = 'Lot ถูกพักไว้ที่ $staLabel';
+          // แสดง lot no จาก msg เดิม แต่ขึ้นบรรทัดใหม่สำหรับ "ไม่สามารถเริ่มงานได้"
+          alertMsg =
+              msg
+                  .replaceAll(' ยังไม่สามารถเริ่มงานได้', '')
+                  .replaceAll('ยังไม่สามารถเริ่มงานได้', '')
+                  .trim() +
+              '\nไม่สามารถเริ่มงานได้';
+        } else {
+          alertTitle = msg.contains('Cancel')
               ? 'เอกสารถูกยกเลิก'
               : msg.contains('เสร็จสิ้น')
               ? 'งานเสร็จสิ้นแล้ว'
-              : 'เอกสารถูกปิดการใช้งาน',
-          message: msg.isNotEmpty
+              : 'เอกสารถูกปิดการใช้งาน';
+          alertMsg = msg.isNotEmpty
               ? msg
-              : 'เอกสารนี้ไม่สามารถใช้งานได้ กรุณาติดต่อ Admin',
+              : 'เอกสารนี้ไม่สามารถใช้งานได้ กรุณาติดต่อ Admin';
+        }
+        CoolerAlert.show(
+          context,
+          title: alertTitle,
+          message: alertMsg,
           type: CoolerAlertType.warning,
           duration: const Duration(seconds: 3),
         );
