@@ -41,6 +41,196 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
+  Future<bool> _showStationConfirm({
+    required String firstname,
+    required String lastname,
+    required String staId,
+    required String staName,
+  }) async {
+    const _orange = Color(0xFFF39C12);
+    const _orangeDark = Color(0xFFE67E22);
+    const _orangeBg = Color(0xFFFFF8E7);
+
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+        backgroundColor: Colors.transparent,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Container(
+            decoration: BoxDecoration(
+              color: _orangeBg,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _orangeDark.withOpacity(0.5),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: _orange.withOpacity(0.2),
+                  blurRadius: 24,
+                  offset: const Offset(0, 8),
+                ),
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── แถบส้มบน ──
+                Container(
+                  height: 6,
+                  decoration: const BoxDecoration(
+                    color: _orange,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(20),
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // ── ไอคอน ──
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: _orange,
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: _orange.withOpacity(0.35),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: const Icon(
+                              Icons.warning_rounded,
+                              color: Colors.white,
+                              size: 28,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          // ── ข้อความ ──
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'ยืนยันการเข้าสู่ระบบ',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
+                                    color: _orange,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                RichText(
+                                  text: TextSpan(
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Color(0xFF2D3436),
+                                      height: 1.6,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    children: [
+                                      const TextSpan(text: 'คุณ '),
+                                      TextSpan(
+                                        text: '$firstname $lastname',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      const TextSpan(
+                                        text: ' ต้องการเข้าทำงานที่ ',
+                                      ),
+                                      TextSpan(
+                                        text: '$staId : $staName',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.indigo,
+                                        ),
+                                      ),
+                                      const TextSpan(text: ' นี้ใช่หรือไม่?'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                side: const BorderSide(color: Colors.grey),
+                              ),
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text(
+                                'ยกเลิก',
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _orange,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                elevation: 0,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text(
+                                'ยืนยัน',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    return result == true;
+  }
+
   Future<void> _onSubmit() async {
     final username = _usernameCtrl.text.trim();
 
@@ -96,6 +286,21 @@ class _LoginPageState extends State<LoginPage> {
         );
         return;
       }
+
+      // ── confirm ก่อน navigate ──────────────────────────────
+      final firstname = userInfo['u_firstname']?.toString() ?? '';
+      final lastname = userInfo['u_lastname']?.toString() ?? '';
+      final staId = userInfo['op_sta_id']?.toString() ?? _selectedStaId ?? '';
+      final staName = userInfo['op_sta_name']?.toString() ?? '';
+
+      if (!mounted) return;
+      final confirmed = await _showStationConfirm(
+        firstname: firstname,
+        lastname: lastname,
+        staId: staId,
+        staName: staName,
+      );
+      if (!confirmed) return; // กด ยกเลิก → อยู่หน้า login เฉยๆ
 
       await AuthStorage.saveLogin(
         tokenAccess: tokenAccess,

@@ -256,7 +256,7 @@ class _SummaryPageState extends State<SummaryPage> {
                   _kv('Condition', _tfLabel(scan['tf_rs_code'])),
                   _kv(
                     'OK / NG',
-                    '${scan['op_sc_good_qty'] ?? 0} / ${scan['op_sc_scrap_qty'] ?? 0}',
+                    '${_fmtNum(scan['op_sc_good_qty'])} / ${_fmtNum(scan['op_sc_scrap_qty'])}',
                   ),
                   _kv('Lot No', scan['lot_no']?.toString() ?? '-'),
                   _kv('Start', _fmtTs(scan['op_sc_ts']?.toString())),
@@ -515,7 +515,7 @@ class _SummaryPageState extends State<SummaryPage> {
                                       ),
                                     const Spacer(),
                                     Text(
-                                      'Qty: $qty',
+                                      'Qty: ${_fmtNum(t['transfer_qty'])}',
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w600,
                                       ),
@@ -586,6 +586,21 @@ class _SummaryPageState extends State<SummaryPage> {
       ],
     ),
   );
+
+  String _fmtNum(dynamic v) {
+    if (v == null) return '0';
+    final n =
+        int.tryParse(v.toString()) ??
+        double.tryParse(v.toString())?.toInt() ??
+        0;
+    final s = n.abs().toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
+    }
+    return n < 0 ? '-$buf' : buf.toString();
+  }
 
   String _fmtTs(String? iso) {
     if (iso == null || iso == '-') return '-';
@@ -722,7 +737,7 @@ class _SummaryPageState extends State<SummaryPage> {
                                     ),
                                   ),
                                   subtitle: Text(
-                                    'SC: $opScId\nMC: $mc | OK: $good | NG: $scrap | $type',
+                                    'SC: $opScId\nMC: $mc | OK: ${_fmtNum(good)} | NG: ${_fmtNum(scrap)} | $type',
                                   ),
                                   isThreeLine: true,
                                   trailing: const Icon(Icons.chevron_right),
@@ -812,7 +827,7 @@ class _SummaryPageState extends State<SummaryPage> {
                                             overflow: TextOverflow.ellipsis,
                                           ),
                                           Text(
-                                            'Station: $sta  •  Qty: $qty',
+                                            'Station: $sta  •  Qty: ${_fmtNum(pl['parked_qty'] ?? pl['qty'])}',
                                             style: const TextStyle(
                                               fontSize: 10,
                                               color: Colors.grey,
