@@ -135,7 +135,7 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: Colors.white,
       appBar: AppBar(
         backgroundColor: Colors.orange,
         foregroundColor: Colors.white,

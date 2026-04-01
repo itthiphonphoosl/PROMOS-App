@@ -34,7 +34,16 @@ class PromosApp extends StatelessWidget {
           navigatorKey: rootNavKey,
           debugShowCheckedModeBanner: false,
           title: 'ProMoSystem',
-          theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+          theme: ThemeData(
+            colorSchemeSeed: Colors.indigo,
+            useMaterial3: true,
+            cardTheme: const CardThemeData(
+              color: Colors.white,
+              surfaceTintColor: Colors.transparent,
+              elevation: 2,
+              shadowColor: Colors.black26,
+            ),
+          ),
           home: snap.data!,
         );
       },

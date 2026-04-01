@@ -206,7 +206,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
         title: const Text('Summary'),
         backgroundColor: Colors.blue,

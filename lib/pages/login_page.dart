@@ -332,7 +332,7 @@ class _LoginPageState extends State<LoginPage> {
         : null;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: Colors.white,
       body: Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -370,10 +370,18 @@ class _LoginPageState extends State<LoginPage> {
                 const SizedBox(height: 32),
 
                 // ── Card ───────────────────────────────────
-                Card(
-                  elevation: 4,
-                  shape: RoundedRectangleBorder(
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 20,
+                        spreadRadius: 2,
+                        offset: Offset.zero,
+                      ),
+                    ],
                   ),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(24, 24, 24, 28),

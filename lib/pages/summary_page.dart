@@ -224,6 +224,7 @@ class _SummaryPageState extends State<SummaryPage> {
       showDragHandle: true,
       isDismissible: true,
       enableDrag: true,
+      backgroundColor: Colors.white,
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.90,
         maxWidth: 560,
@@ -300,11 +301,7 @@ class _SummaryPageState extends State<SummaryPage> {
 
                         // lot_parked_status=1 → lot นี้ถูก mark พักไว้
                         final _ps = t['lot_parked_status'];
-                        final isParked =
-                            _ps == true ||
-                            _ps == 1 ||
-                            _ps?.toString() == '1' ||
-                            _ps?.toString() == 'true';
+                        final isParked = _toInt01(_ps) == 1;
 
                         // ✅ เช็ค station
                         final scanStaId = scan['op_sta_id']?.toString() ?? '';
@@ -446,9 +443,12 @@ class _SummaryPageState extends State<SummaryPage> {
                                           vertical: 4,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: Colors.blueGrey.shade50,
+                                          color: Colors.blueGrey.shade100,
                                           borderRadius: BorderRadius.circular(
                                             20,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.blueGrey.shade300,
                                           ),
                                         ),
                                         child: Text(
@@ -625,7 +625,7 @@ class _SummaryPageState extends State<SummaryPage> {
     final lotsAll = _allLotsFromPayload();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
+      backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
         backgroundColor: Colors.blue,
         foregroundColor: Colors.white,
@@ -780,66 +780,84 @@ class _SummaryPageState extends State<SummaryPage> {
                               ],
                             ),
                             const SizedBox(height: 10),
-                            ..._parkedLots().map((pl) {
-                              final lotNo =
-                                  (pl['parked_lot_no'] ?? pl['lot_no'])
-                                      ?.toString() ??
-                                  '-';
-                              final qty =
-                                  (pl['parked_qty'] ?? pl['qty'])?.toString() ??
-                                  '-';
-                              final sta =
-                                  (pl['op_sta_id'] ?? pl['parked_at_sta'])
-                                      ?.toString() ??
-                                  '-';
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 6),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: Colors.blue.shade200,
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxHeight: 180),
+                              child: Scrollbar(
+                                thumbVisibility: true,
+                                child: SingleChildScrollView(
+                                  child: Column(
+                                    children: _parkedLots().map((pl) {
+                                      final lotNo =
+                                          (pl['parked_lot_no'] ?? pl['lot_no'])
+                                              ?.toString() ??
+                                          '-';
+                                      final qty =
+                                          (pl['parked_qty'] ?? pl['qty'])
+                                              ?.toString() ??
+                                          '-';
+                                      final sta =
+                                          (pl['op_sta_id'] ??
+                                                  pl['parked_at_sta'])
+                                              ?.toString() ??
+                                          '-';
+                                      return Container(
+                                        margin: const EdgeInsets.only(
+                                          bottom: 6,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: Colors.blue.shade200,
+                                          ),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            const Icon(
+                                              Icons.pause_circle_outline,
+                                              color: Colors.blue,
+                                              size: 16,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    lotNo,
+                                                    style: const TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                  Text(
+                                                    'Station: $sta  •  Qty: ${_fmtNum(pl['parked_qty'] ?? pl['qty'])}',
+                                                    style: const TextStyle(
+                                                      fontSize: 10,
+                                                      color: Colors.grey,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }).toList(),
                                   ),
                                 ),
-                                child: Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.pause_circle_outline,
-                                      color: Colors.blue,
-                                      size: 16,
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            lotNo,
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                          Text(
-                                            'Station: $sta  •  Qty: ${_fmtNum(pl['parked_qty'] ?? pl['qty'])}',
-                                            style: const TextStyle(
-                                              fontSize: 10,
-                                              color: Colors.grey,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            }),
+                              ),
+                            ),
                           ],
                         ),
                       ),
