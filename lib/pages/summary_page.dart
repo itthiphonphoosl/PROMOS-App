@@ -41,6 +41,36 @@ class _SummaryPageState extends State<SummaryPage> {
     return lots.first; // ✅ lot แม่ = suffix น้อยสุด (เช่น ...000220)
   }
 
+  // 🎨 คืนค่าสี bg / border / text ตาม condition label
+  ({Color bg, Color border, Color text}) _tfColor(String tf) {
+    switch (tf) {
+      case 'Master':
+        return (
+          bg: Colors.blue.shade50,
+          border: Colors.blue.shade200,
+          text: Colors.blue.shade800,
+        );
+      case 'Split':
+        return (
+          bg: Colors.purple.shade50,
+          border: Colors.purple.shade200,
+          text: Colors.purple.shade800,
+        );
+      case 'Co-ID':
+        return (
+          bg: Colors.green.shade50,
+          border: Colors.green.shade200,
+          text: Colors.green.shade800,
+        );
+      default:
+        return (
+          bg: Colors.grey.shade100,
+          border: Colors.grey.shade300,
+          text: Colors.grey.shade700,
+        );
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -286,8 +316,10 @@ class _SummaryPageState extends State<SummaryPage> {
 
                       for (final t in trs) {
                         final tf = _tfLabel(t['tf_rs_code']);
-                        final fromLot = t['from_lot_no']?.toString() ?? '-';
-                        final toLot = t['to_lot_no']?.toString() ?? '-';
+                        final fromLot = (t['from_lot_no']?.toString() ?? '-')
+                            .trim();
+                        final toLot = (t['to_lot_no']?.toString() ?? '-')
+                            .trim();
                         final qty = t['transfer_qty']?.toString() ?? '0';
                         final ts = _fmtTs(t['transfer_ts']?.toString());
                         final fromTk = t['from_tk_id']?.toString() ?? '';
@@ -437,26 +469,32 @@ class _SummaryPageState extends State<SummaryPage> {
                                         ),
                                       )
                                     else
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: Colors.blueGrey.shade100,
-                                          borderRadius: BorderRadius.circular(
-                                            20,
-                                          ),
-                                          border: Border.all(
-                                            color: Colors.blueGrey.shade300,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          tf,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
+                                      // 🎨 badge สีตาม condition: Master=ฟ้า, Split=ม่วง, Co-ID=เขียว
+                                      Builder(
+                                        builder: (_) {
+                                          final c = _tfColor(tf);
+                                          return Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 10,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: c.bg,
+                                              borderRadius:
+                                                  BorderRadius.circular(20),
+                                              border: Border.all(
+                                                color: c.border,
+                                              ),
+                                            ),
+                                            child: Text(
+                                              tf,
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                color: c.text,
+                                              ),
+                                            ),
+                                          );
+                                        },
                                       ),
                                     const SizedBox(width: 6),
                                     // badge ส้ม: lot พักปกติ (ไม่ใช่ auto-park)
