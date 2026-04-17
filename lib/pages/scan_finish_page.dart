@@ -97,8 +97,13 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
     return all.first;
   }
 
+  String? _pickDocBaseLot() {
+    final docLot = (widget.tkDoc['lot_no']?.toString() ?? '').trim();
+    if (docLot.isNotEmpty) return docLot;
+    return null;
+  }
+
   Future<void> _loadCurrentLotsFromSummary() async {
-    // ✅ ย้ายออกมาก่อน try เพื่อให้ fallback setState ใช้ได้
     final passedLots =
         widget.allLots
             .map((x) => (x['lot_no']?.toString() ?? '').trim())
@@ -107,13 +112,16 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             .toList()
           ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
 
+    // ✅ ให้หน้า Finish โชว์ lot แรกของเอกสารทันที
+    final docBaseLot = (widget.tkDoc['lot_no']?.toString() ?? '').trim();
+    _baseLotNo ??= docBaseLot.isNotEmpty
+        ? docBaseLot
+        : _pickBaseLotFromAllLots();
+
     try {
       final res = await ApiService.getSummaryByTkId(widget.tkId);
       final body = jsonDecode(res.body) as Map<String, dynamic>;
 
-      if (passedLots.isNotEmpty) {
-        _baseLotNo ??= passedLots.first;
-      }
       if (res.statusCode == 200) {
         // 1) base lot
         final baseLotNoDirect = (body['base_lot_no']?.toString() ?? '').trim();
@@ -122,15 +130,20 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         final baseLot = baseLotNoDirect.isNotEmpty
             ? baseLotNoDirect
             : (baseLotNoFromObj.isNotEmpty ? baseLotNoFromObj : '');
-        if (baseLot.isNotEmpty)
+
+        if (baseLot.isNotEmpty) {
           _baseLotNo = baseLot;
-        else
-          _baseLotNo ??= _pickBaseLotFromAllLots();
+        } else {
+          _baseLotNo ??= docBaseLot.isNotEmpty
+              ? docBaseLot
+              : _pickBaseLotFromAllLots();
+        }
 
         // 2) machine / station
         final scans = (body['scans'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
+
         Map<String, dynamic>? activeScan;
         for (final s in scans.reversed) {
           final ft = s['op_sc_finish_ts'];
@@ -139,6 +152,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             break;
           }
         }
+
         final current = (body['current'] as Map?)?.cast<String, dynamic>();
         _staId =
             (activeScan?['op_sta_id']?.toString() ??
@@ -157,6 +171,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         final transfers = (body['transfers'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
+
         String? latestTs;
         for (final t in transfers) {
           final ts = t['transfer_ts']?.toString() ?? '';
@@ -165,17 +180,20 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             latestTs = ts;
           }
         }
+
         final latestBatch = latestTs == null
             ? transfers
             : transfers
                   .where((t) => t['transfer_ts']?.toString() == latestTs)
                   .toList();
+
         final activeToSet = <String>{};
         for (final t in latestBatch) {
           final tl = (t['to_lot_no']?.toString() ?? '').trim();
           final isParked = _toInt01(t['lot_parked_status']) == 1;
           if (tl.isNotEmpty && !isParked) activeToSet.add(tl);
         }
+
         final leaf = activeToSet.where((x) => x.isNotEmpty).toList()
           ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
 
@@ -201,7 +219,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           final srcTk = p['from_tk_id']?.toString() ?? '';
           if (lotNo.isEmpty || srcTk.isEmpty) continue;
           if (srcTk != widget.tkId) {
-            // เป็น lot จาก TK อื่น
             if (!crossTkMap.containsKey(lotNo)) {
               crossTkMap[lotNo] = srcTk;
               crossTkParkedList.add(p);
@@ -209,12 +226,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           }
         }
 
-        // 5) ✅ default part_no — เอาแค่ part_no จริงๆ ไม่เอา lot number
-        //    ลำดับ: out_part_no จาก transfer ล่าสุด → current.part_no → tkDoc.part_no
-        //    ✅ _hasTransferHistory = เคย transfer มาแล้ว (tf_rs_code != 0 / transfers ไม่ว่าง)
-        // ✅ build activeLots จาก incoming_lots (active เท่านั้น)
-        //    ถ้า hasTransferHistory ให้ใช้ incoming_lots แทน passedLots
-        //    เพราะ passedLots มีแค่ lot ที่ scan มา (1 lot)
+        // 5) default part_no
         final activeLots =
             (body['incoming_lots'] as List? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map))
@@ -230,8 +242,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                 .toList()
               ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
 
-        // ✅ ใช้ last_finished_op_sc_id หรือ activeLots > 1 แทน transfers
-        //    เพราะ summary API ไม่มี top-level "transfers" key
         final hasTransferHistory =
             body['last_finished_op_sc_id'] != null || activeLots.length > 1;
 
@@ -245,34 +255,33 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             }
           }
         }
-        // fallback → current.part_no (เป็น part_no จริง ไม่ใช่ lot)
-        if (lastPartNo == null || lastPartNo!.isEmpty) {
+
+        if (lastPartNo == null || lastPartNo.isEmpty) {
           lastPartNo = _extractPartNoOnly(
             current?['part_no']?.toString() ?? '',
           );
         }
-        // fallback → tkDoc.part_no
-        if (lastPartNo == null || lastPartNo!.isEmpty) {
+
+        if (lastPartNo == null || lastPartNo.isEmpty) {
           lastPartNo = _extractPartNoOnly(
             widget.tkDoc['part_no']?.toString() ?? '',
           );
         }
 
-        // ── build lotQtyMap: lot_no → qty default ─────────────
-        // tf=1/2: to_lot_no → transfer_qty (latest batch)
-        // tf=3 parked: parked_lot_no → parked_qty
+        // 6) build lotQtyMap
         final qtyMap = <String, int>{};
         for (final t in latestBatch) {
           final lotNo = (t['to_lot_no']?.toString() ?? '').trim();
           final qty = int.tryParse(t['transfer_qty']?.toString() ?? '') ?? 0;
           if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
         }
+
         for (final p in stationAllRaw) {
           final lotNo = (p['parked_lot_no']?.toString() ?? '').trim();
           final qty = int.tryParse(p['parked_qty']?.toString() ?? '') ?? 0;
           if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
         }
-        // incoming_lots fallback (เอกสารใหม่ยังไม่มี transfer)
+
         for (final il in (body['incoming_lots'] as List? ?? [])) {
           final lotNo = (il['lot_no']?.toString() ?? '').trim();
           final qty = int.tryParse(il['qty']?.toString() ?? '') ?? 0;
@@ -281,8 +290,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
         if (!mounted) return;
         setState(() {
-          // ✅ hasTransferHistory → ใช้ activeLots จาก incoming_lots (ครบทุก lot)
-          //    ยังไม่เคย transfer → ใช้ passedLots (lot ที่ scan มา)
           _currentLots = hasTransferHistory
               ? (activeLots.isNotEmpty
                     ? activeLots
@@ -294,6 +301,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                     : (activeLots.isNotEmpty
                           ? activeLots
                           : (_baseLotNo != null ? [_baseLotNo!] : [])));
+
           _parkedLots = parkedFromSummary;
           _crossTkLotMap = crossTkMap;
           _crossTkParkedLots = crossTkParkedList;
@@ -308,12 +316,16 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
 
     if (!mounted) return;
     setState(() {
-      _baseLotNo ??= passedLots.isNotEmpty
-          ? passedLots.first
-          : _pickBaseLotFromAllLots();
+      _baseLotNo ??= docBaseLot.isNotEmpty
+          ? docBaseLot
+          : (passedLots.isNotEmpty
+                ? passedLots.first
+                : _pickBaseLotFromAllLots());
+
       _currentLots = passedLots.isNotEmpty
           ? passedLots
           : (_baseLotNo != null ? [_baseLotNo!] : []);
+
       _parkedLots = [];
       _crossTkLotMap = {};
       _crossTkParkedLots = [];
@@ -459,6 +471,33 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       return;
     }
 
+    // ✅ กันกรณีเลือก Split-ID แต่ยังไม่ได้เลือก split
+    for (int i = 0; i < _groups.length; i++) {
+      final g = _groups[i];
+
+      if (g.tfRsCode == 2) {
+        if (g.fromLotNo == null || g.fromLotNo!.trim().isEmpty) {
+          CoolerAlert.show(
+            context,
+            title: 'แจ้งเตือน',
+            message: 'Group ${i + 1}: กรุณาเลือก From Lot',
+            type: CoolerAlertType.warning,
+          );
+          return;
+        }
+
+        if (g.splits.isEmpty) {
+          CoolerAlert.show(
+            context,
+            title: 'แจ้งเตือน',
+            message: 'Group ${i + 1}: ท่านยังไม่ได้เลือกการ Split',
+            type: CoolerAlertType.warning,
+          );
+          return;
+        }
+      }
+    }
+
     final sumGroupQty = _groups.fold(
       0,
       (a, g) =>
@@ -505,18 +544,32 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
       if (g.fromLotNo != null && g.fromLotNo!.isNotEmpty) {
         selectedFromLots.add(g.fromLotNo!);
       } else if (_isFirstScan && _currentLots.length == 1) {
-        // [FIX] isFirstScan + lot เดียว → ล็อคอัตโนมัติ
-        // g.fromLotNo อาจเป็น null ถ้า _autoLockFromLot() วิ่งก่อน lots โหลดเสร็จ
-        // → ถือว่า lot นั้นถูกเลือกอยู่แล้ว ไม่ต้อง auto-park
         selectedFromLots.add(_currentLots.first);
       }
+
       for (final m in g.mergeLots) {
         if (m.fromLotNo != null && m.fromLotNo!.isNotEmpty) {
           selectedFromLots.add(m.fromLotNo!);
         }
       }
     }
-    final willBeParked = _currentLots
+
+    // ✅ ต้องตรวจทั้ง:
+    // 1) active lots
+    // 2) base lot
+    // 3) own parked lots ที่อยู่ใน station นี้
+    final ownParkedLotNosForCheck = _parkedLots
+        .map((p) => (p['parked_lot_no']?.toString() ?? '').trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+
+    final candidateLotsForParkCheck = <String>{
+      ..._currentLots.where((l) => l.trim().isNotEmpty),
+      ...ownParkedLotNosForCheck,
+      if ((_baseLotNo ?? '').trim().isNotEmpty) _baseLotNo!.trim(),
+    }.toList()..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+
+    final willBeParked = candidateLotsForParkCheck
         .where((l) => l.trim().isNotEmpty && !selectedFromLots.contains(l))
         .toList();
 
@@ -711,7 +764,7 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
                                     ),
                                     const SizedBox(height: 2),
                                     Text(
-                                      'Group ${info['group']}: จะพัก ${info['diff']} ชิ้น (splits ไม่ครบ qty)',
+                                      'Group ${info['group']}: จะพัก ${_fmt((info['diff'] as int?) ?? 0)} ชิ้น (splits ไม่ครบ qty)',
                                       style: TextStyle(
                                         fontSize: 11,
                                         color: Colors.grey.shade700,
@@ -1758,19 +1811,32 @@ class _GroupEntry {
     // tf=1 / tf=2: out_part_no ใช้ defaultPartNo อัตโนมัติ → ไม่ต้อง validate ที่นี่
 
     if (tfRsCode == 2) {
+      if (fromLotNo == null || fromLotNo!.trim().isEmpty) {
+        return 'กรุณาเลือก From Lot';
+      }
+
+      if (splits.isEmpty) {
+        return 'ท่านยังไม่ได้เลือกการ Split';
+      }
+
       for (final s in splits) {
-        if (s.partNo == null || s.partNo!.isEmpty)
+        if (s.partNo == null || s.partNo!.isEmpty) {
           return 'เลือก Part No ใน split ให้ครบ';
+        }
         final q = int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', ''));
         if (q == null) return 'qty ใน split ต้องเป็นตัวเลข';
         if (q <= 0) return 'qty ใน split ต้องมากกว่า 0';
       }
+
       final sumSplit = splits.fold(
         0,
         (a, s) =>
             a + (int.tryParse(s.qtyCtrl.text.trim().replaceAll(',', '')) ?? 0),
       );
-      if (sumSplit > qty) return 'sum splits ($sumSplit) เกิน group qty ($qty)';
+
+      if (sumSplit > qty) {
+        return 'sum splits ($sumSplit) เกิน group qty ($qty)';
+      }
     }
 
     if (tfRsCode == 3) {
@@ -3204,7 +3270,10 @@ class _MergeLotRow extends StatelessWidget {
               if (v != null) {
                 final dq = lotQtyMap[v];
                 if (dq != null && dq > 0) {
-                  entry.qtyCtrl.text = dq.toString();
+                  entry.qtyCtrl.text = dq.toString().replaceAllMapped(
+                    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+                    (m) => ',',
+                  );
                 }
               }
               onChanged();
@@ -3298,6 +3367,7 @@ class _InfoCard extends StatelessWidget {
       partNo = p['part_no'] ?? '';
       partName = p['part_name'] ?? '';
     }
+
     if (partName.isEmpty && _looksLikeLotNo(lotHeader)) {
       final p = _parsePartFromLot(lotHeader);
       partNo = partNo.isNotEmpty ? partNo : (p['part_no'] ?? '');
@@ -3307,15 +3377,10 @@ class _InfoCard extends StatelessWidget {
     final staId = (stationId?.trim().isNotEmpty ?? false)
         ? stationId!.trim()
         : (tkDoc['op_sta_id']?.toString() ?? '-').trim();
-    final staName = (stationName?.trim().isNotEmpty ?? false)
-        ? stationName!.trim()
-        : (tkDoc['op_sta_name']?.toString() ?? '-').trim();
+
     final mcId = (machineId?.trim().isNotEmpty ?? false)
         ? machineId!.trim()
         : (tkDoc['MC_id']?.toString() ?? '-').trim();
-    final mcName = (machineName?.trim().isNotEmpty ?? false)
-        ? machineName!.trim()
-        : (tkDoc['MC_name']?.toString() ?? '-').trim();
 
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -3337,8 +3402,8 @@ class _InfoCard extends StatelessWidget {
             Text('Part No: ${partNo.isEmpty ? '-' : partNo}'),
             Text('Part Name: ${partName.isEmpty ? '-' : partName}'),
             Text('Lot No: ${lotHeader.isEmpty ? '-' : lotHeader}'),
-            Text('Station: $staId ($staName)'),
-            Text('Machine: $mcId ($mcName)'),
+            Text('Current Station: $staId'),
+            Text('Current Machine: $mcId'),
             if (currentLots.isNotEmpty) ...[
               const Divider(height: 16),
               const Text(

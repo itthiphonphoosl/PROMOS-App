@@ -18,6 +18,7 @@ class SummaryPage extends StatefulWidget {
 class _SummaryPageState extends State<SummaryPage> {
   bool _loading = true;
   Map<String, dynamic>? _data;
+
   int _runSuffix(String lotNo) {
     final m = RegExp(r'-(\d+)$').firstMatch(lotNo.trim());
     if (m == null) return 1 << 30;
@@ -38,10 +39,9 @@ class _SummaryPageState extends State<SummaryPage> {
     final lots = _allLotsFromPayload();
     if (lots.isEmpty) return '-';
     lots.sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
-    return lots.first; // ✅ lot แม่ = suffix น้อยสุด (เช่น ...000220)
+    return lots.first;
   }
 
-  // 🎨 คืนค่าสี bg / border / text ตาม condition label
   ({Color bg, Color border, Color text}) _tfColor(String tf) {
     switch (tf) {
       case 'Master':
@@ -135,9 +135,7 @@ class _SummaryPageState extends State<SummaryPage> {
     }
   }
 
-  /// ดึง parked_lots จาก payload
   List<Map<String, dynamic>> _parkedLots() {
-    // [FIX] รองรับทั้ง summary API (parked_lots) และ finish result (all_parked_lots)
     final p = _data?['parked_lots'] ?? _data?['all_parked_lots'];
     if (p is List) {
       return p.map((e) => Map<String, dynamic>.from(e as Map)).toList();
@@ -145,8 +143,6 @@ class _SummaryPageState extends State<SummaryPage> {
     return [];
   }
 
-  /// ดึง list scans จาก payload
-  /// รองรับทั้ง stations_history (backend ใหม่) และ flat scans (เก่า)
   List<Map<String, dynamic>> _scans() {
     final sh = _data?['stations_history'];
     if (sh is List && sh.isNotEmpty) {
@@ -158,10 +154,8 @@ class _SummaryPageState extends State<SummaryPage> {
         if (s is List) {
           for (final raw in s) {
             final scan = Map<String, dynamic>.from(raw as Map);
-            // inject station info จาก parent ถ้า scan ยังไม่มี
             scan['op_sta_id'] ??= staId;
             scan['op_sta_name'] ??= staName;
-            // inject tf_rs_name เป็น tf_rs_code fallback ให้ _tfLabel ทำงานได้
             if (scan['tf_rs_code'] == null && scan['tf_rs_name'] != null) {
               scan['tf_rs_code'] = scan['tf_rs_name'];
             }
@@ -172,13 +166,12 @@ class _SummaryPageState extends State<SummaryPage> {
       return result;
     }
     final s = _data?['scans'];
-    if (s is List)
+    if (s is List) {
       return s.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
     return [];
   }
 
-  /// ดึง list transfers จาก payload
-  /// รองรับทั้ง nested ใน scans (backend ใหม่) และ flat transfers (เก่า)
   List<Map<String, dynamic>> _transfers() {
     final sh = _data?['stations_history'];
     if (sh is List && sh.isNotEmpty) {
@@ -188,31 +181,30 @@ class _SummaryPageState extends State<SummaryPage> {
         if (scans is List) {
           for (final scan in scans) {
             final t = scan['transfers'];
-            if (t is List)
+            if (t is List) {
               result.addAll(t.map((e) => Map<String, dynamic>.from(e as Map)));
+            }
           }
         }
       }
       if (result.isNotEmpty) return result;
     }
     final t = _data?['transfers'];
-    if (t is List)
+    if (t is List) {
       return t.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    }
     return [];
   }
 
-  /// กรอง transfers ตาม op_sc_id
   List<Map<String, dynamic>> _transfersByOpSc(String opScId) {
     return _transfers()
         .where((x) => (x['op_sc_id']?.toString() ?? '') == opScId)
         .toList();
   }
 
-  /// รวม lot ทั้งหมดจาก current + transfers (เอาไว้โชว์ "Lots ทั้งหมด" ถ้าต้องการ)
   List<String> _allLotsFromPayload() {
     final transfers = _transfers();
 
-    // track first-seen transfer_ts for each lot (as to_lot_no = when it was born)
     final firstSeenTs = <String, String>{};
     for (final t in transfers) {
       final ts = t['transfer_ts']?.toString() ?? '';
@@ -222,7 +214,6 @@ class _SummaryPageState extends State<SummaryPage> {
       }
     }
 
-    // also include from_lot_no that never appear as to_lot (original lot from TKDoc)
     final originalLot =
         (_data?['tk']?['lot_no']?.toString() ??
                 _data?['current']?['lot_no']?.toString() ??
@@ -237,7 +228,7 @@ class _SummaryPageState extends State<SummaryPage> {
       final ta = firstSeenTs[a] ?? '';
       final tb = firstSeenTs[b] ?? '';
       if (ta.isEmpty && tb.isEmpty) return a.compareTo(b);
-      if (ta.isEmpty) return -1; // original lot (no ts) goes first
+      if (ta.isEmpty) return -1;
       if (tb.isEmpty) return 1;
       return ta.compareTo(tb);
     });
@@ -246,7 +237,27 @@ class _SummaryPageState extends State<SummaryPage> {
 
   void _openScanDetail(Map<String, dynamic> scan) {
     final opScId = scan['op_sc_id']?.toString() ?? '';
-    final trs = _transfersByOpSc(opScId);
+    final rawTrs = _transfersByOpSc(opScId);
+    final allTransfers = _transfers();
+
+    // ซ่อนแถว Master ที่ถูกใช้เป็นต้นทางของ Split/Co-ID แล้ว
+    final trs = rawTrs.where((t) {
+      final tf = _tfLabel(t['tf_rs_code']);
+      final toLot = (t['to_lot_no']?.toString() ?? '').trim();
+
+      if (tf != 'Master' || toLot.isEmpty) return true;
+
+      final consumedLater = rawTrs.any((other) {
+        if (identical(other, t)) return false;
+
+        final otherTf = _tfLabel(other['tf_rs_code']);
+        final otherFrom = (other['from_lot_no']?.toString() ?? '').trim();
+
+        return otherTf != 'Master' && otherFrom == toLot;
+      });
+
+      return !consumedLater;
+    }).toList();
 
     showModalBottomSheet(
       context: context,
@@ -310,7 +321,6 @@ class _SummaryPageState extends State<SummaryPage> {
                     )
                   else
                     ...() {
-                      // ✅ build transfer cards พร้อม separator แดงก่อน lot "ไม่ได้ใช้" ตัวแรก
                       final result = <Widget>[];
                       bool separatorInserted = false;
 
@@ -320,69 +330,63 @@ class _SummaryPageState extends State<SummaryPage> {
                             .trim();
                         final toLot = (t['to_lot_no']?.toString() ?? '-')
                             .trim();
-                        final qty = t['transfer_qty']?.toString() ?? '0';
                         final ts = _fmtTs(t['transfer_ts']?.toString());
                         final fromTk = t['from_tk_id']?.toString() ?? '';
                         final toTk = t['to_tk_id']?.toString() ?? '';
 
-                        // ✅ color info (STA006)
                         final colorId = t['color_id'];
                         final colorNo = t['color_no']?.toString() ?? '';
                         final colorName = t['color_name']?.toString() ?? '';
                         final hasColor = colorId != null && colorNo.isNotEmpty;
 
-                        // lot_parked_status=1 → lot นี้ถูก mark พักไว้
                         final _ps = t['lot_parked_status'];
                         final isParked = _toInt01(_ps) == 1;
 
-                        // ✅ เช็ค station
-                        final scanStaId = scan['op_sta_id']?.toString() ?? '';
-                        final tStaId = t['op_sta_id']?.toString() ?? '';
-                        final isParkedHere = isParked && tStaId == scanStaId;
-
-                        // from_tk ≠ to_tk → cross-TK
                         final isCrossTk =
                             fromTk.isNotEmpty &&
                             toTk.isNotEmpty &&
                             fromTk != toTk;
 
-                        // ✅ isAutoParked: lot ไม่ถูกเลือกใช้เลยใน scan นี้
-                        //
-                        // กรณี 1 — split ไม่ครบ: backend gen lot ใหม่ → from_lot ≠ to_lot เสมอ
-                        //           (e.g. from=lot1, to=lot4_new) → isAutoParked=false → ORANGE
-                        //
-                        // กรณี 2 — lot ไม่ถูกเลือก (auto-park): backend INSERT row ใหม่
-                        //           from_lot == to_lot (same lot) → isAutoParked=true → RED
-                        //
-                        // ✅ isSameLot: from_lot == to_lot → ต้องเป็น case 2 เสมอ (ไม่ว่า backend เก่าหรือใหม่)
-                        //    รองรับทั้ง backend เก่า (ที่ UPDATE row เดิมผิด) และ backend ใหม่ (INSERT-only)
                         final isSameLot =
                             fromLot.isNotEmpty && fromLot == toLot;
 
-                        final usedAsSource = trs.any(
+                        final fromLotUsedByAnotherActiveRow = trs.any(
                           (other) =>
-                              (other['from_lot_no']?.toString() ?? '') ==
-                                  toLot &&
-                              other != t &&
-                              _toInt01(other['lot_parked_status']) == 0,
-                        );
-                        final fromLotActivelyUsed = trs.any(
-                          (other) =>
-                              (other['from_lot_no']?.toString() ?? '') ==
+                              !identical(other, t) &&
+                              (other['from_lot_no']?.toString() ?? '').trim() ==
                                   fromLot &&
-                              other != t &&
                               _toInt01(other['lot_parked_status']) == 0,
                         );
-                        final isAutoParked =
+
+                        final isSplitRemainderParked =
                             isParked &&
                             !isCrossTk &&
-                            // from==to → case 2 auto-park แน่นอน (bypass usedAsSource check)
-                            // from≠to → ใช้ usedAsSource / fromLotActivelyUsed ตามปกติ
-                            (isSameLot ||
-                                (!usedAsSource && !fromLotActivelyUsed));
+                            tf == 'Split' &&
+                            !isSameLot;
 
-                        // ✅ แทรกเส้นแดงคั่นก่อน lot ไม่ได้ใช้ตัวแรก
-                        if (isAutoParked && !separatorInserted) {
+                        final isUnusedParked =
+                            isParked &&
+                            !isCrossTk &&
+                            (isSameLot || !fromLotUsedByAnotherActiveRow);
+
+                        // ✅ lot นี้เคยถูกพักมาก่อน แล้วถูกนำมาใช้ใน row ปัจจุบัน
+                        // ใช้แบบกว้าง ๆ เพื่อไม่ให้หลุดเคสที่ transfer_ts / payload มาไม่ครบ
+                        final wasParkedBeforeUse = allTransfers.any((old) {
+                          final oldToLot = (old['to_lot_no']?.toString() ?? '')
+                              .trim();
+                          final oldParked =
+                              _toInt01(old['lot_parked_status']) == 1;
+                          return oldToLot == fromLot && oldParked;
+                        });
+
+                        // ✅ เอาวงเขียวกลับมา:
+                        // - ถ้าเคยเป็น parked lot มาก่อน -> เขียว
+                        // - หรือเป็น cross-TK -> เขียวเหมือนเดิม
+                        final isUsedParkedLot =
+                            !isUnusedParked &&
+                            (wasParkedBeforeUse || isCrossTk);
+
+                        if (isUnusedParked && !separatorInserted) {
                           separatorInserted = true;
                           result.add(
                             Padding(
@@ -432,7 +436,7 @@ class _SummaryPageState extends State<SummaryPage> {
                         }
 
                         final card = Card(
-                          margin: const EdgeInsets.only(bottom: 10),
+                          margin: const EdgeInsets.only(bottom: 6),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -443,8 +447,7 @@ class _SummaryPageState extends State<SummaryPage> {
                               children: [
                                 Row(
                                   children: [
-                                    // ✅ isAutoParked → badge แดง "ไม่ได้ใช้" แทน Condition chip
-                                    if (isAutoParked)
+                                    if (isUnusedParked)
                                       Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 10,
@@ -460,16 +463,14 @@ class _SummaryPageState extends State<SummaryPage> {
                                           ),
                                         ),
                                         child: Text(
-                                          '🔴 ไม่ได้ใช้',
+                                          'ไม่ได้ใช้',
                                           style: TextStyle(
                                             fontWeight: FontWeight.w600,
-                                            fontSize: 12,
                                             color: Colors.red.shade700,
                                           ),
                                         ),
                                       )
                                     else
-                                      // 🎨 badge สีตาม condition: Master=ฟ้า, Split=ม่วง, Co-ID=เขียว
                                       Builder(
                                         builder: (_) {
                                           final c = _tfColor(tf);
@@ -496,11 +497,10 @@ class _SummaryPageState extends State<SummaryPage> {
                                           );
                                         },
                                       ),
-                                    const SizedBox(width: 6),
-                                    // badge ส้ม: lot พักปกติ (ไม่ใช่ auto-park)
-                                    if (isParkedHere &&
-                                        !isCrossTk &&
-                                        !isAutoParked)
+
+                                    if (!isUnusedParked &&
+                                        isSplitRemainderParked) ...[
+                                      const SizedBox(width: 6),
                                       Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 8,
@@ -526,8 +526,10 @@ class _SummaryPageState extends State<SummaryPage> {
                                           ),
                                         ),
                                       ),
-                                    // badge เขียว: ดึง lot พักจาก TK อื่นมาใช้
-                                    if (isCrossTk)
+                                    ],
+
+                                    if (isUsedParkedLot) ...[
+                                      const SizedBox(width: 6),
                                       Container(
                                         padding: const EdgeInsets.symmetric(
                                           horizontal: 8,
@@ -551,6 +553,8 @@ class _SummaryPageState extends State<SummaryPage> {
                                           ),
                                         ),
                                       ),
+                                    ],
+
                                     const Spacer(),
                                     Text(
                                       'Qty: ${_fmtNum(t['transfer_qty'])}',
@@ -560,10 +564,9 @@ class _SummaryPageState extends State<SummaryPage> {
                                     ),
                                   ],
                                 ),
-                                const SizedBox(height: 8),
+                                const SizedBox(height: 4),
                                 _kvSmall('From', fromLot),
                                 _kvSmall('To', toLot),
-                                // ✅ แสดงสีเฉพาะ row ที่มี color_id (STA006)
                                 if (hasColor)
                                   _kvSmall(
                                     '🎨 สี',
@@ -576,8 +579,10 @@ class _SummaryPageState extends State<SummaryPage> {
                             ),
                           ),
                         );
+
                         result.add(card);
                       }
+
                       return result;
                     }(),
                 ],
@@ -656,9 +661,19 @@ class _SummaryPageState extends State<SummaryPage> {
   @override
   Widget build(BuildContext context) {
     final data = _data;
+
     final current = (data?['current'] is Map)
         ? Map<String, dynamic>.from(data!['current'] as Map)
         : <String, dynamic>{};
+
+    final base = (data?['base'] is Map)
+        ? Map<String, dynamic>.from(data!['base'] as Map)
+        : <String, dynamic>{};
+
+    final tk = (data?['tk'] is Map)
+        ? Map<String, dynamic>.from(data!['tk'] as Map)
+        : <String, dynamic>{};
+
     final scans = _scans();
     final lotsAll = _allLotsFromPayload();
 
@@ -681,7 +696,6 @@ class _SummaryPageState extends State<SummaryPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ── Header ───────────────────────────────
                   Card(
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -699,19 +713,27 @@ class _SummaryPageState extends State<SummaryPage> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          _kv('Part No', current['part_no']?.toString() ?? '-'),
+                          _kv(
+                            'Part No',
+                            (base['part_no']?.toString().isNotEmpty == true
+                                        ? base['part_no']
+                                        : tk['part_no'])
+                                    ?.toString() ??
+                                '-',
+                          ),
                           _kv(
                             'Part Name',
-                            current['part_name']?.toString() ?? '-',
+                            (base['part_name']?.toString().isNotEmpty == true
+                                        ? base['part_name']
+                                        : tk['part_name'])
+                                    ?.toString() ??
+                                '-',
                           ),
                           _kv(
                             'Lot No',
-                            // ✅ ใช้ base.lot_no จาก backend โดยตรง (lot แรกของเอกสาร)
-                            // fallback → _motherLotFromPayload() กรณี finishResult ยังไม่มี base
-                            (_data?['base']?['lot_no']?.toString() ?? '')
-                                    .isNotEmpty
-                                ? _data!['base']['lot_no'].toString()
-                                : _motherLotFromPayload(),
+                            current['lot_no']?.toString().isNotEmpty == true
+                                ? current['lot_no'].toString()
+                                : '-',
                           ),
                           _kv(
                             'Current Station',
@@ -727,7 +749,6 @@ class _SummaryPageState extends State<SummaryPage> {
                   ),
                   const SizedBox(height: 12),
 
-                  // ── Scan History ─────────────────────────
                   Card(
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -788,7 +809,6 @@ class _SummaryPageState extends State<SummaryPage> {
                   ),
                   const SizedBox(height: 12),
 
-                  // ── [FIX] Parked Lots ─────────────────────
                   if (_parkedLots().isNotEmpty) ...[
                     Card(
                       shape: RoundedRectangleBorder(
@@ -829,15 +849,12 @@ class _SummaryPageState extends State<SummaryPage> {
                                           (pl['parked_lot_no'] ?? pl['lot_no'])
                                               ?.toString() ??
                                           '-';
-                                      final qty =
-                                          (pl['parked_qty'] ?? pl['qty'])
-                                              ?.toString() ??
-                                          '-';
                                       final sta =
                                           (pl['op_sta_id'] ??
                                                   pl['parked_at_sta'])
                                               ?.toString() ??
                                           '-';
+
                                       return Container(
                                         margin: const EdgeInsets.only(
                                           bottom: 6,
@@ -903,7 +920,6 @@ class _SummaryPageState extends State<SummaryPage> {
                     const SizedBox(height: 12),
                   ],
 
-                  // ── Lots from payload ─────────────────────
                   Card(
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
