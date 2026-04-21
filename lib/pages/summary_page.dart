@@ -350,6 +350,28 @@ class _SummaryPageState extends State<SummaryPage> {
                         final isSameLot =
                             fromLot.isNotEmpty && fromLot == toLot;
 
+                        // lot นี้เคยถูกพักมาก่อน แล้วถูกนำมาใช้ใน row ปัจจุบัน
+                        //
+                        // ✅ Fix 1: exclude ตัวเองออกด้วย transfer_id
+                        //   กรณี "unused parked lot" backend insert self-referencing row
+                        //   (from_lot_no == to_lot_no, lot_parked_status=1)
+                        //   → allTransfers มีแถวนี้อยู่ด้วย → match ตัวเองพอดี
+                        //   → wasParkedBeforeUse=true ผิด → isUnusedParked=false
+                        //   → แสดงเป็นสีเขียว "นำ lot พักมาใช้" แทนสีแดง "ไม่ได้ใช้"
+                        final myTransferId = t['transfer_id']?.toString() ?? '';
+                        final wasParkedBeforeUse = allTransfers.any((old) {
+                          if (myTransferId.isNotEmpty &&
+                              (old['transfer_id']?.toString() ?? '') ==
+                                  myTransferId)
+                            return false;
+                          final oldToLot = (old['to_lot_no']?.toString() ?? '')
+                              .trim();
+                          final oldParked =
+                              _toInt01(old['lot_parked_status']) == 1;
+                          return oldToLot == fromLot && oldParked;
+                        });
+
+                        // มี active row อื่นใน scan เดียวกันใช้ fromLot นี้จริงไหม
                         final fromLotUsedByAnotherActiveRow = trs.any(
                           (other) =>
                               !identical(other, t) &&
@@ -358,33 +380,55 @@ class _SummaryPageState extends State<SummaryPage> {
                               _toInt01(other['lot_parked_status']) == 0,
                         );
 
+                        // ✅ Fix 4: ป้องกัน "spurious self-park" จาก bug เดิมใน backend
+                        // กรณี: row เป็น self-referencing (from==to, parked=1)
+                        // แต่ lot นั้นถูก consumed เป็น lot อื่นไปแล้วใน station ก่อนหน้า
+                        // (Split tf=2 ที่ from_lot → to_lot ต่างกัน)
+                        // → ถ้า allTransfers มี row ที่ from_lot_no == toLot
+                        //   และ to_lot_no != toLot → lot ถูก consume ไปแล้ว ห้าม "ไม่ได้ใช้"
+                        final wasConsumedIntoOtherLot =
+                            isSameLot &&
+                            allTransfers.any((other) {
+                              final otherFrom =
+                                  (other['from_lot_no']?.toString() ?? '')
+                                      .trim();
+                              final otherTo =
+                                  (other['to_lot_no']?.toString() ?? '').trim();
+                              return otherFrom == fromLot &&
+                                  otherTo.isNotEmpty &&
+                                  otherTo != fromLot;
+                            });
+
+                        // สีส้ม = lot พักจาก split ไม่ครบ
+                        // ✅ Fix 5: ลบ !isSameLot ออก
+                        //   self-park row ที่ backend ⑦.pre insert (from==to, tf=2, parked=1)
+                        //   คือ Split lot ที่ยังไม่ถูกใช้ที่ station นี้ → รอ Co-ID ต่อไป
+                        //   ไม่ใช่ "ไม่ได้ใช้จริง" จนกว่า TK จะปิดโดยไม่มีการใช้ lot นั้นเลย
+                        //   Master (tf=1) ไม่กระทบ เพราะ check tf=='Split' อยู่แล้ว
+                        // ✅ Fix 6: เพิ่ม !isSameLot — Split remainder จริงได้ lot ใหม่ (from!=to)
+                        //   ⑦.pre self-park มี from==to → isSameLot=true → ตกไป isUnusedParked → แดง
                         final isSplitRemainderParked =
                             isParked &&
                             !isCrossTk &&
                             tf == 'Split' &&
                             !isSameLot;
 
+                        // สีแดง = lot พักที่ไม่ได้ถูกใช้จริง
                         final isUnusedParked =
                             isParked &&
                             !isCrossTk &&
-                            (isSameLot || !fromLotUsedByAnotherActiveRow);
+                            !isSplitRemainderParked &&
+                            !wasParkedBeforeUse &&
+                            !fromLotUsedByAnotherActiveRow &&
+                            !wasConsumedIntoOtherLot;
 
-                        // ✅ lot นี้เคยถูกพักมาก่อน แล้วถูกนำมาใช้ใน row ปัจจุบัน
-                        // ใช้แบบกว้าง ๆ เพื่อไม่ให้หลุดเคสที่ transfer_ts / payload มาไม่ครบ
-                        final wasParkedBeforeUse = allTransfers.any((old) {
-                          final oldToLot = (old['to_lot_no']?.toString() ?? '')
-                              .trim();
-                          final oldParked =
-                              _toInt01(old['lot_parked_status']) == 1;
-                          return oldToLot == fromLot && oldParked;
-                        });
-
-                        // ✅ เอาวงเขียวกลับมา:
-                        // - ถ้าเคยเป็น parked lot มาก่อน -> เขียว
-                        // - หรือเป็น cross-TK -> เขียวเหมือนเดิม
+                        // สีเขียว = lot พักที่ถูกนำกลับมาใช้
+                        // ✅ Fix 3: ใช้ is_used_parked_lot จาก backend เป็น source of truth
+                        //   backend คำนวณถูกต้อง: เฉพาะ Co-ID (tf=3) เท่านั้น
+                        //   Master/Split จะไม่มี field นี้เป็น true ไม่ว่า wasParkedBeforeUse จะเป็นอะไร
                         final isUsedParkedLot =
-                            !isUnusedParked &&
-                            (wasParkedBeforeUse || isCrossTk);
+                            _toInt01(t['is_used_parked_lot']) == 1 ||
+                            (t['is_used_parked_lot'] == true);
 
                         if (isUnusedParked && !separatorInserted) {
                           separatorInserted = true;
@@ -731,9 +775,12 @@ class _SummaryPageState extends State<SummaryPage> {
                           ),
                           _kv(
                             'Lot No',
-                            current['lot_no']?.toString().isNotEmpty == true
-                                ? current['lot_no'].toString()
-                                : '-',
+                            // fix: base lot (first lot of doc), same pattern as Part No/Name
+                            (base['lot_no']?.toString().isNotEmpty == true
+                                        ? base['lot_no']
+                                        : tk['lot_no'])
+                                    ?.toString() ??
+                                '-',
                           ),
                           _kv(
                             'Current Station',

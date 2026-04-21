@@ -244,13 +244,44 @@ class _ScanStartPageState extends State<ScanStartPage> {
         await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
 
+        // fix: use base lot (first lot of doc) for part_no/part_name/lot_no
+        // detail = latest TKDetail (changes after Co-ID)
+        // base   = TKRunLog ASC LIMIT 1 (always the original)
+        final startTkBase = Map<String, dynamic>.from(
+          (_tkDoc?['base'] as Map?)?.cast<String, dynamic>() ?? {},
+        );
+        final startTkDoc = Map<String, dynamic>.from(
+          (_tkDoc?['detail'] as Map?)?.cast<String, dynamic>() ?? {},
+        );
+
+        // fallback เผื่อ backend start ส่ง tk_doc มาครบ ก็เติมได้ แต่ไม่ให้ทับค่าหลัก
+        final startTkDocFromApi =
+            (body['tk_doc'] as Map<String, dynamic>? ?? {});
+
+        // resolve: base -> detail -> api fallback
+        String? _resolve(String key) {
+          final fromBase = startTkBase[key]?.toString() ?? '';
+          if (fromBase.trim().isNotEmpty) return fromBase;
+          final fromDetail = startTkDoc[key]?.toString() ?? '';
+          if (fromDetail.trim().isNotEmpty) return fromDetail;
+          return startTkDocFromApi[key]?.toString();
+        }
+
+        final normalizedTkDoc = <String, dynamic>{
+          'part_no': _resolve('part_no'),
+          'part_name': _resolve('part_name'),
+          'lot_no': _resolve('lot_no'),
+          'op_sta_id': startTkDocFromApi['op_sta_id'],
+          'MC_id': startTkDocFromApi['MC_id'],
+        };
+
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (_) => ScanFinishPage(
               opScId: body['op_sc_id']?.toString() ?? '',
               tkId: _resolvedTkId!,
-              tkDoc: body['tk_doc'] as Map<String, dynamic>? ?? {},
+              tkDoc: normalizedTkDoc,
               allLots:
                   (body['current_lots'] as List?)
                       ?.map((e) => Map<String, dynamic>.from(e as Map))
@@ -431,18 +462,31 @@ class _ScanStartPageState extends State<ScanStartPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             _Row('TK ID', _resolvedTkId ?? '-', bold: true),
+                            // fix: show base lot (first lot of doc)
                             _Row(
                               'Part No',
-                              _tkDoc!['detail']?['part_no']?.toString() ?? '-',
+                              (_tkDoc!['base']?['part_no']?.toString() ?? '')
+                                      .isNotEmpty
+                                  ? _tkDoc!['base']!['part_no'].toString()
+                                  : _tkDoc!['detail']?['part_no']?.toString() ??
+                                        '-',
                             ),
                             _Row(
                               'Part Name',
-                              _tkDoc!['detail']?['part_name']?.toString() ??
-                                  '-',
+                              (_tkDoc!['base']?['part_name']?.toString() ?? '')
+                                      .isNotEmpty
+                                  ? _tkDoc!['base']!['part_name'].toString()
+                                  : _tkDoc!['detail']?['part_name']
+                                            ?.toString() ??
+                                        '-',
                             ),
                             _Row(
                               'Lot No',
-                              _tkDoc!['detail']?['lot_no']?.toString() ?? '-',
+                              (_tkDoc!['base']?['lot_no']?.toString() ?? '')
+                                      .isNotEmpty
+                                  ? _tkDoc!['base']!['lot_no'].toString()
+                                  : _tkDoc!['detail']?['lot_no']?.toString() ??
+                                        '-',
                             ),
                             _Row('Status', _statusLabel(_tkDoc!['tk_status'])),
                             // station ล่าสุดที่ finish

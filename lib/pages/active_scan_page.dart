@@ -92,6 +92,12 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
           (body['item'] as Map?)?.cast<String, dynamic>() ??
           <String, dynamic>{};
 
+      // fix: use base lot (first lot of TK doc) for part_no/part_name/lot_no
+      // body['base'] is added by getOpScanById backend (TKRunLog ASC LIMIT 1)
+      final baseInfo =
+          (body['base'] as Map?)?.cast<String, dynamic>() ??
+          <String, dynamic>{};
+
       if (!mounted) return;
       Navigator.push(
         context,
@@ -100,8 +106,13 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
             opScId: opScId,
             tkId: tkId,
             tkDoc: {
-              'part_no': item['part_no']?.toString() ?? '',
-              'part_name': item['part_name']?.toString() ?? '',
+              'part_no': (baseInfo['part_no']?.toString() ?? '').isNotEmpty
+                  ? baseInfo['part_no'].toString()
+                  : item['part_no']?.toString() ?? '',
+              'part_name': (baseInfo['part_name']?.toString() ?? '').isNotEmpty
+                  ? baseInfo['part_name'].toString()
+                  : item['part_name']?.toString() ?? '',
+              'lot_no': baseInfo['lot_no']?.toString() ?? '',
               'op_sta_id':
                   opItem['op_sta_id']?.toString() ??
                   item['op_sta_id']?.toString() ??
