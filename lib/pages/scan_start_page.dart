@@ -244,33 +244,51 @@ class _ScanStartPageState extends State<ScanStartPage> {
         await Future.delayed(const Duration(seconds: 1));
         if (!mounted) return;
 
-        // fix: use base lot (first lot of doc) for part_no/part_name/lot_no
-        // detail = latest TKDetail (changes after Co-ID)
-        // base   = TKRunLog ASC LIMIT 1 (always the original)
-        final startTkBase = Map<String, dynamic>.from(
-          (_tkDoc?['base'] as Map?)?.cast<String, dynamic>() ?? {},
-        );
-        final startTkDoc = Map<String, dynamic>.from(
-          (_tkDoc?['detail'] as Map?)?.cast<String, dynamic>() ?? {},
-        );
-
-        // fallback เผื่อ backend start ส่ง tk_doc มาครบ ก็เติมได้ แต่ไม่ให้ทับค่าหลัก
+        // ✅ ดึง base part_no / part_name / lot_no จาก getSummaryByTkId
+        // เพื่อให้ได้ข้อมูลตอนสร้างเอกสารเสมอ ไม่เปลี่ยนตาม Co-ID / Master-ID ภายหลัง
         final startTkDocFromApi =
             (body['tk_doc'] as Map<String, dynamic>? ?? {});
 
-        // resolve: base -> detail -> api fallback
-        String? _resolve(String key) {
-          final fromBase = startTkBase[key]?.toString() ?? '';
-          if (fromBase.trim().isNotEmpty) return fromBase;
-          final fromDetail = startTkDoc[key]?.toString() ?? '';
-          if (fromDetail.trim().isNotEmpty) return fromDetail;
-          return startTkDocFromApi[key]?.toString();
+        String basePn = '';
+        String basePname = '';
+        String baseLotNo = '';
+        try {
+          final summaryRes = await ApiService.getSummaryByTkId(_resolvedTkId!);
+          if (summaryRes.statusCode == 200) {
+            final summaryBody =
+                jsonDecode(summaryRes.body) as Map<String, dynamic>;
+            final baseDoc =
+                (summaryBody['base'] as Map?)?.cast<String, dynamic>() ?? {};
+            final tkDocSum =
+                (summaryBody['tk'] as Map?)?.cast<String, dynamic>() ?? {};
+
+            basePn = (baseDoc['part_no']?.toString() ?? '').isNotEmpty
+                ? baseDoc['part_no'].toString()
+                : (tkDocSum['part_no']?.toString() ?? '').isNotEmpty
+                ? tkDocSum['part_no'].toString()
+                : startTkDocFromApi['part_no']?.toString() ?? '';
+
+            basePname = (baseDoc['part_name']?.toString() ?? '').isNotEmpty
+                ? baseDoc['part_name'].toString()
+                : (tkDocSum['part_name']?.toString() ?? '').isNotEmpty
+                ? tkDocSum['part_name'].toString()
+                : startTkDocFromApi['part_name']?.toString() ?? '';
+
+            baseLotNo = (baseDoc['lot_no']?.toString() ?? '').isNotEmpty
+                ? baseDoc['lot_no'].toString()
+                : tkDocSum['lot_no']?.toString() ?? '';
+          }
+        } catch (_) {
+          // fallback → ใช้ค่าจาก startOpScan response แทน
+          basePn = startTkDocFromApi['part_no']?.toString() ?? '';
+          basePname = startTkDocFromApi['part_name']?.toString() ?? '';
+          baseLotNo = startTkDocFromApi['lot_no']?.toString() ?? '';
         }
 
         final normalizedTkDoc = <String, dynamic>{
-          'part_no': _resolve('part_no'),
-          'part_name': _resolve('part_name'),
-          'lot_no': _resolve('lot_no'),
+          'part_no': basePn,
+          'part_name': basePname,
+          'lot_no': baseLotNo,
           'op_sta_id': startTkDocFromApi['op_sta_id'],
           'MC_id': startTkDocFromApi['MC_id'],
         };

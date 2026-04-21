@@ -79,24 +79,49 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
     final opScId = item['op_sc_id']?.toString() ?? '';
 
     try {
-      final res = await ApiService.getOpScanById(opScId);
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      // ✅ ดึงทั้ง 2 API พร้อมกัน
+      final results = await Future.wait([
+        ApiService.getSummaryByTkId(
+          tkId,
+        ), // ← base part_no/part_name/lot_no แรกของเอกสาร
+        ApiService.getOpScanById(
+          opScId,
+        ), // ← current_lots + station/machine ของ scan นี้
+      ]);
 
+      final summaryBody = jsonDecode(results[0].body) as Map<String, dynamic>;
+      final scanBody = jsonDecode(results[1].body) as Map<String, dynamic>;
+
+      // ✅ base = part_no / part_name / lot_no แรกของเอกสาร (ไม่เปลี่ยนแม้จะผ่าน Master-ID)
+      // ดึงจาก summary.base (TKRunLog ASC LIMIT 1) หรือ summary.tk เป็น fallback
+      final baseDoc =
+          (summaryBody['base'] as Map?)?.cast<String, dynamic>() ?? {};
+      final tkDoc = (summaryBody['tk'] as Map?)?.cast<String, dynamic>() ?? {};
+
+      final basePn = (baseDoc['part_no']?.toString() ?? '').isNotEmpty
+          ? baseDoc['part_no'].toString()
+          : (tkDoc['part_no']?.toString() ?? '').isNotEmpty
+          ? tkDoc['part_no'].toString()
+          : item['part_no']?.toString() ?? '';
+
+      final basePname = (baseDoc['part_name']?.toString() ?? '').isNotEmpty
+          ? baseDoc['part_name'].toString()
+          : (tkDoc['part_name']?.toString() ?? '').isNotEmpty
+          ? tkDoc['part_name'].toString()
+          : item['part_name']?.toString() ?? '';
+
+      final baseLotNo = (baseDoc['lot_no']?.toString() ?? '').isNotEmpty
+          ? baseDoc['lot_no'].toString()
+          : tkDoc['lot_no']?.toString() ?? '';
+
+      // ✅ current_lots + station/machine จาก scan นี้
       final lots =
-          (body['current_lots'] as List?)
+          (scanBody['current_lots'] as List?)
               ?.map((e) => Map<String, dynamic>.from(e as Map))
               .toList() ??
           [];
 
-      final opItem =
-          (body['item'] as Map?)?.cast<String, dynamic>() ??
-          <String, dynamic>{};
-
-      // fix: use base lot (first lot of TK doc) for part_no/part_name/lot_no
-      // body['base'] is added by getOpScanById backend (TKRunLog ASC LIMIT 1)
-      final baseInfo =
-          (body['base'] as Map?)?.cast<String, dynamic>() ??
-          <String, dynamic>{};
+      final opItem = (scanBody['item'] as Map?)?.cast<String, dynamic>() ?? {};
 
       if (!mounted) return;
       Navigator.push(
@@ -106,13 +131,11 @@ class _ActiveScanPageState extends State<ActiveScanPage> {
             opScId: opScId,
             tkId: tkId,
             tkDoc: {
-              'part_no': (baseInfo['part_no']?.toString() ?? '').isNotEmpty
-                  ? baseInfo['part_no'].toString()
-                  : item['part_no']?.toString() ?? '',
-              'part_name': (baseInfo['part_name']?.toString() ?? '').isNotEmpty
-                  ? baseInfo['part_name'].toString()
-                  : item['part_name']?.toString() ?? '',
-              'lot_no': baseInfo['lot_no']?.toString() ?? '',
+              // ✅ ข้อมูลหัวการ์ด → ยึด base เสมอ ไม่เปลี่ยนตาม output ของ scan ก่อนหน้า
+              'part_no': basePn,
+              'part_name': basePname,
+              'lot_no': baseLotNo,
+              // ✅ station / machine → ใช้ของ scan นี้ตามปกติ
               'op_sta_id':
                   opItem['op_sta_id']?.toString() ??
                   item['op_sta_id']?.toString() ??
