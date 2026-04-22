@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -131,63 +132,27 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
             ? docBaseLot
             : _pickBaseLotFromAllLots();
 
-        // 2) machine / station
-        final scans = (body['scans'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-
-        Map<String, dynamic>? activeScan;
-        for (final s in scans.reversed) {
-          final ft = s['op_sc_finish_ts'];
-          if (ft == null || ft.toString().trim().isEmpty) {
-            activeScan = s;
-            break;
-          }
-        }
-
-        final current = (body['current'] as Map?)?.cast<String, dynamic>();
+        // 2) machine / station — ใช้ widget.tkDoc โดยตรง (ถูก set มาแล้วจาก active_scan_page)
+        // FIX: body['scans'] ไม่มีอยู่ top-level (อยู่ใน stations_history[n].scans)
+        //      ดึง station/machine จาก widget.tkDoc แทน, fallback ไป body['current']
+        final bodyCurrentMap = (body['current'] as Map?)
+            ?.cast<String, dynamic>();
         _staId =
-            (activeScan?['op_sta_id']?.toString() ??
-                    current?['op_sta_id']?.toString() ??
+            (widget.tkDoc['op_sta_id']?.toString() ??
+                    bodyCurrentMap?['op_sta_id']?.toString() ??
                     '')
                 .trim();
-        _staName = (activeScan?['op_sta_name']?.toString() ?? '').trim();
+        _staName = (widget.tkDoc['op_sta_name']?.toString() ?? '').trim();
         _mcId =
-            (activeScan?['MC_id']?.toString() ??
-                    current?['MC_id']?.toString() ??
+            (widget.tkDoc['MC_id']?.toString() ??
+                    bodyCurrentMap?['MC_id']?.toString() ??
                     '')
                 .trim();
-        _mcName = (activeScan?['MC_name']?.toString() ?? '').trim();
+        _mcName = (widget.tkDoc['MC_name']?.toString() ?? '').trim();
 
-        // 3) leaf lots (active only)
-        final transfers = (body['transfers'] as List? ?? [])
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList();
-
-        String? latestTs;
-        for (final t in transfers) {
-          final ts = t['transfer_ts']?.toString() ?? '';
-          if (ts.isNotEmpty &&
-              (latestTs == null || ts.compareTo(latestTs!) > 0)) {
-            latestTs = ts;
-          }
-        }
-
-        final latestBatch = latestTs == null
-            ? transfers
-            : transfers
-                  .where((t) => t['transfer_ts']?.toString() == latestTs)
-                  .toList();
-
-        final activeToSet = <String>{};
-        for (final t in latestBatch) {
-          final tl = (t['to_lot_no']?.toString() ?? '').trim();
-          final isParked = _toInt01(t['lot_parked_status']) == 1;
-          if (tl.isNotEmpty && !isParked) activeToSet.add(tl);
-        }
-
-        final leaf = activeToSet.where((x) => x.isNotEmpty).toList()
-          ..sort((a, b) => _runSuffix(a).compareTo(_runSuffix(b)));
+        // 3) NOTE: body['transfers'] ไม่มีอยู่ top-level ใน summary response
+        //    transfers ถูก nest อยู่ใน stations_history[n].scans[m].transfers
+        //    → ใช้ incoming_lots จาก backend (section 5) แทน ซึ่ง fix แล้วให้ครบทุก active lot
 
         // 4) parked lots — กรองเฉพาะ lot ที่พักใน station ของ operator ปัจจุบัน
         final currentStaId = _staId?.trim() ?? '';
@@ -237,23 +202,10 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         final hasTransferHistory =
             body['last_finished_op_sc_id'] != null || activeLots.length > 1;
 
-        String? lastPartNo;
-        if (hasTransferHistory) {
-          for (final t in transfers.reversed) {
-            final pNo = _extractPartNoOnly(t['out_part_no']?.toString() ?? '');
-            if (pNo.isNotEmpty) {
-              lastPartNo = pNo;
-              break;
-            }
-          }
-        }
-
-        if (lastPartNo == null || lastPartNo.isEmpty) {
-          lastPartNo = _extractPartNoOnly(
-            current?['part_no']?.toString() ?? '',
-          );
-        }
-
+        // FIX: ดึง part_no จาก bodyCurrentMap (ประกาศไว้แล้วด้านบน) หรือ widget.tkDoc
+        String? lastPartNo = _extractPartNoOnly(
+          bodyCurrentMap?['part_no']?.toString() ?? '',
+        );
         if (lastPartNo == null || lastPartNo.isEmpty) {
           lastPartNo = _extractPartNoOnly(
             widget.tkDoc['part_no']?.toString() ?? '',
@@ -261,22 +213,16 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         }
 
         // 6) build lotQtyMap
+        //    ลำดับ: incoming_lots (qty รวมจาก backend) → parked_lots_station_all
         final qtyMap = <String, int>{};
-        for (final t in latestBatch) {
-          final lotNo = (t['to_lot_no']?.toString() ?? '').trim();
-          final qty = int.tryParse(t['transfer_qty']?.toString() ?? '') ?? 0;
-          if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
-        }
-
-        for (final p in stationAllRaw) {
-          final lotNo = (p['parked_lot_no']?.toString() ?? '').trim();
-          final qty = int.tryParse(p['parked_qty']?.toString() ?? '') ?? 0;
-          if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
-        }
-
         for (final il in (body['incoming_lots'] as List? ?? [])) {
           final lotNo = (il['lot_no']?.toString() ?? '').trim();
           final qty = int.tryParse(il['qty']?.toString() ?? '') ?? 0;
+          if (lotNo.isNotEmpty && qty > 0) qtyMap[lotNo] = qty;
+        }
+        for (final p in stationAllRaw) {
+          final lotNo = (p['parked_lot_no']?.toString() ?? '').trim();
+          final qty = int.tryParse(p['parked_qty']?.toString() ?? '') ?? 0;
           if (lotNo.isNotEmpty && qty > 0) qtyMap.putIfAbsent(lotNo, () => qty);
         }
 
@@ -1107,10 +1053,13 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         // ✅ Auto-print หลัง finish: ปริ้นเฉพาะ lot ใหม่ของ scan นี้ (from≠to)
         String printMsg = '';
         try {
-          final printRes = await ApiService.printBarcode(
-            tkId: widget.tkId,
-            opScId: widget.opScId,
-          );
+          final printRes =
+              await ApiService.printBarcode(
+                tkId: widget.tkId,
+                opScId: widget.opScId,
+              ).timeout(
+                const Duration(seconds: 10),
+              ); // ✅ Fix: timeout 10 วิ ป้องกัน UI ค้าง
           final printBody = jsonDecode(printRes.body) as Map<String, dynamic>;
           if (printRes.statusCode == 200 && printBody['ok'] == true) {
             final printed = printBody['printed'] as int? ?? 0;
@@ -1130,6 +1079,9 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           } else {
             printMsg = '\n\n⚠ ปริ้นไม่สำเร็จ: ${printBody["message"] ?? ""}';
           }
+        } on TimeoutException {
+          printMsg =
+              '\n\n⚠ Printer ไม่ตอบสนอง (timeout)'; // ✅ Fix: จับ timeout แยก
         } catch (_) {
           printMsg = '\n\n⚠ เชื่อมต่อเครื่องปริ้นไม่ได้';
         }

@@ -13,7 +13,6 @@ class SummarySearchPage extends StatefulWidget {
 }
 
 class _SummarySearchPageState extends State<SummarySearchPage> {
-  // เปลี่ยนจาก tk_id → รับ lot_no แทน
   final _lotCtrl = TextEditingController();
   bool _loading = false;
 
@@ -49,6 +48,42 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
           return;
         } else if (lookupRes.statusCode == 403) {
           final msg = lookupBody['message']?.toString() ?? '';
+          final tkIdFrom403 = lookupBody['tk_id']?.toString() ?? '';
+
+          // ✅ FIX: เช็ค consumed — lot ถูก Split/Co-ID ออกไปแล้ว
+          // หน้า Summary = ดูประวัติเท่านั้น → ยังเปิดดูได้ปกติ ไม่ต้อง block
+          final rawConsumed = lookupBody['consumed'];
+          final isConsumed =
+              rawConsumed == true ||
+              rawConsumed == 1 ||
+              rawConsumed?.toString() == 'true' ||
+              msg.contains('Split/Co-ID');
+
+          if (isConsumed && tkIdFrom403.isNotEmpty) {
+            // แจ้งเตือนแบบ warning แต่ยังเปิด Summary ได้
+            CoolerAlert.show(
+              context,
+              title: 'Lot ถูกใช้ไปแล้ว',
+              message: 'Lot นี้ถูก Split/Co-ID ออกไปแล้ว',
+              type: CoolerAlertType.warning,
+              duration: const Duration(seconds: 2),
+            );
+            final summaryRes = await ApiService.getSummaryByTkId(tkIdFrom403);
+            final summaryBody =
+                jsonDecode(summaryRes.body) as Map<String, dynamic>;
+            if (!mounted) return;
+            if (summaryRes.statusCode == 200) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      SummaryPage(tkId: tkIdFrom403, finishResult: summaryBody),
+                ),
+              );
+            }
+            return;
+          }
+
           // ✅ เช็ค parked_at_sta / parked_lot_no ที่ backend ส่งมาจริง
           final isParked =
               lookupBody['parked'] == true ||
@@ -60,7 +95,6 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
           if (isParked) {
             final parkedSta = lookupBody['parked_at_sta']?.toString() ?? '-';
             final tkIdParked = lookupBody['tk_id']?.toString() ?? '';
-            // ตัด "ยังไม่สามารถเริ่มงานได้" ออก — หน้า summary ดูข้อมูลเท่านั้น ไม่ได้ start งาน
             final displayMsg = msg
                 .replaceAll(' ยังไม่สามารถเริ่มงานได้', '')
                 .replaceAll('ยังไม่สามารถเริ่มงานได้', '')
@@ -72,7 +106,6 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
               type: CoolerAlertType.warning,
               duration: const Duration(seconds: 3),
             );
-            // ดึง summary ต่อด้วย tk_id ที่ได้มา
             if (tkIdParked.isNotEmpty) {
               final summaryRes = await ApiService.getSummaryByTkId(tkIdParked);
               final summaryBody =
@@ -93,7 +126,7 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
             return;
           }
 
-          // กรณีอื่น (cancel / closed) → แจ้งเตือนอย่างเดียว ไม่ navigate
+          // กรณีอื่น (cancel / closed / tk_active=0) → แจ้งเตือนอย่างเดียว ไม่ navigate
           CoolerAlert.show(
             context,
             title: msg.contains('Cancel')
@@ -223,7 +256,6 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── Search field + QR button ──
             Card(
               elevation: 2,
               shape: RoundedRectangleBorder(
@@ -274,7 +306,6 @@ class _SummarySearchPageState extends State<SummarySearchPage> {
             ),
             const SizedBox(height: 16),
 
-            // ── ปุ่ม Open Summary ──
             SizedBox(
               height: 52,
               child: ElevatedButton.icon(

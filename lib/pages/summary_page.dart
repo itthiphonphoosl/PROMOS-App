@@ -19,6 +19,9 @@ class _SummaryPageState extends State<SummaryPage> {
   bool _loading = true;
   Map<String, dynamic>? _data;
 
+  // ✅ Fix: ScrollController สำหรับ Scrollbar ที่ใช้ thumbVisibility: true
+  final _parkedScrollCtrl = ScrollController();
+
   int _runSuffix(String lotNo) {
     final m = RegExp(r'-(\d+)$').firstMatch(lotNo.trim());
     if (m == null) return 1 << 30;
@@ -69,6 +72,12 @@ class _SummaryPageState extends State<SummaryPage> {
           text: Colors.grey.shade700,
         );
     }
+  }
+
+  @override
+  void dispose() {
+    _parkedScrollCtrl.dispose();
+    super.dispose();
   }
 
   @override
@@ -888,8 +897,10 @@ class _SummaryPageState extends State<SummaryPage> {
                             ConstrainedBox(
                               constraints: const BoxConstraints(maxHeight: 180),
                               child: Scrollbar(
+                                controller: _parkedScrollCtrl,
                                 thumbVisibility: true,
                                 child: SingleChildScrollView(
+                                  controller: _parkedScrollCtrl,
                                   child: Column(
                                     children: _parkedLots().map((pl) {
                                       final lotNo =

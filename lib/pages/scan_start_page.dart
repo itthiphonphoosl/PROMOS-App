@@ -22,6 +22,9 @@ class _ScanStartPageState extends State<ScanStartPage> {
   String? _selectedMcName;
   Map<String, dynamic>? _tkDoc;
   String? _resolvedTkId; // tk_id จริงที่ได้จากการ lookup ด้วย lot_no
+  String?
+  _matchedLotNo; // lot_no จริงใน DB (อาจต่างจากใบที่สแกน ถ้า part เปลี่ยน)
+  bool _isOldLabel = false; // true = สแกนใบเก่า (part_no/name เปลี่ยนแล้ว)
 
   bool _loadingMachines = true;
   bool _loadingTk = false;
@@ -84,6 +87,8 @@ class _ScanStartPageState extends State<ScanStartPage> {
       _loadingTk = true;
       _tkDoc = null;
       _resolvedTkId = null;
+      _matchedLotNo = null;
+      _isOldLabel = false;
     });
 
     try {
@@ -105,8 +110,23 @@ class _ScanStartPageState extends State<ScanStartPage> {
         }
         setState(() {
           _resolvedTkId = body['tk_id']?.toString();
+          _matchedLotNo =
+              body['matched_lot_no']?.toString() ?? body['lot_no']?.toString();
+          _isOldLabel = body['is_old_label'] == true;
           _tkDoc = body;
         });
+
+        // แสดง warning ถ้าสแกนใบเก่า (part เปลี่ยนแล้ว)
+        if (_isOldLabel && mounted) {
+          CoolerAlert.show(
+            context,
+            title: 'ใบเก่า — Part เปลี่ยนแล้ว',
+            message:
+                'Part No./Name ของเอกสารนี้ถูกเปลี่ยนแล้ว\nยังคงเริ่มงานได้ปกติ',
+            type: CoolerAlertType.warning,
+            duration: const Duration(seconds: 4),
+          );
+        }
       } else if (res.statusCode == 404) {
         CoolerAlert.show(
           context,
@@ -115,12 +135,43 @@ class _ScanStartPageState extends State<ScanStartPage> {
         );
       } else if (res.statusCode == 403) {
         final msg = body['message']?.toString() ?? '';
+
+        // ✅ FIX: เช็ค consumed ด้วย fallback หลายรูปแบบ
+        // ป้องกัน Dart dynamic type comparison ที่อาจ fail
+        final rawConsumed = body['consumed'];
+        final isConsumed =
+            rawConsumed == true ||
+            rawConsumed == 1 ||
+            rawConsumed?.toString() == 'true' ||
+            msg.contains('Split/Co-ID');
+
+        if (isConsumed) {
+          final currentLotNos =
+              (body['current_lot_nos'] as List?)
+                  ?.map((e) => e?.toString() ?? '')
+                  .where((s) => s.isNotEmpty)
+                  .toList() ??
+              [];
+          final hint = currentLotNos.isNotEmpty
+              ? 'กรุณาสแกน lot ที่ใช้งานได้:\n${currentLotNos.join("\n")}'
+              : 'ไม่พบ Active Lot ในเอกสารนี้';
+          CoolerAlert.show(
+            context,
+            title: 'Lot ถูกใช้ไปแล้ว',
+            message: '$msg\n\n$hint',
+            type: CoolerAlertType.error,
+            duration: const Duration(seconds: 5),
+          );
+          return;
+        }
+
         // ✅ เช็ค parked_at_sta หรือ parked_lot_no ที่ backend ส่งมาจริง
         final isParked =
             body['parked'] == true ||
             body['parked_at_sta'] != null ||
             body['parked_lot_no'] != null ||
             msg.contains('ถูกพักไว้');
+
         // สร้าง title + message แยกกันตามประเภท
         String alertTitle;
         String alertMsg;
@@ -133,7 +184,6 @@ class _ScanStartPageState extends State<ScanStartPage> {
               ? parkedSta
               : '-';
           alertTitle = 'Lot ถูกพักไว้ที่ $staLabel';
-          // แสดง lot no จาก msg เดิม แต่ขึ้นบรรทัดใหม่สำหรับ "ไม่สามารถเริ่มงานได้"
           alertMsg =
               msg
                   .replaceAll(' ยังไม่สามารถเริ่มงานได้', '')
@@ -180,6 +230,8 @@ class _ScanStartPageState extends State<ScanStartPage> {
       _lotCtrl.clear();
       _tkDoc = null;
       _resolvedTkId = null;
+      _matchedLotNo = null;
+      _isOldLabel = false;
       _selectedMcId = null;
       _selectedMcName = null;
     });
@@ -470,6 +522,40 @@ class _ScanStartPageState extends State<ScanStartPage> {
                     // TK Info
                     if (_tkDoc != null) ...[
                       const SizedBox(height: 12),
+                      // ⚠️ Banner แจ้งเตือนเมื่อสแกนใบเก่า
+                      if (_isOldLabel)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.orange.shade300),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: Colors.orange.shade700,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'ใบเก่า — Part เปลี่ยนแล้ว ยังใช้งานได้ปกติ',
+                                  style: TextStyle(
+                                    color: Colors.orange.shade800,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(

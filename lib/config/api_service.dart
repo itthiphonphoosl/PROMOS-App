@@ -4,7 +4,7 @@ import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://172.16.12.69:4030/api';
+  static const String baseUrl = 'http://172.16.102.89:4030/api';
   // static const String baseUrl = 'http://172.100.11.10:4000/api'; เครื่องลูกค้า
 
   static const String _defaultClientType = 'HH';
