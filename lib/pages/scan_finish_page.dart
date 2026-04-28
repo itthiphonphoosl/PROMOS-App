@@ -1053,13 +1053,10 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
         // ✅ Auto-print หลัง finish: ปริ้นเฉพาะ lot ใหม่ของ scan นี้ (from≠to)
         String printMsg = '';
         try {
-          final printRes =
-              await ApiService.printBarcode(
-                tkId: widget.tkId,
-                opScId: widget.opScId,
-              ).timeout(
-                const Duration(seconds: 10),
-              ); // ✅ Fix: timeout 10 วิ ป้องกัน UI ค้าง
+          final printRes = await ApiService.printBarcode(
+            tkId: widget.tkId,
+            opScId: widget.opScId,
+          );
           final printBody = jsonDecode(printRes.body) as Map<String, dynamic>;
           if (printRes.statusCode == 200 && printBody['ok'] == true) {
             final printed = printBody['printed'] as int? ?? 0;
@@ -1079,9 +1076,6 @@ class _ScanFinishPageState extends State<ScanFinishPage> {
           } else {
             printMsg = '\n\n⚠ ปริ้นไม่สำเร็จ: ${printBody["message"] ?? ""}';
           }
-        } on TimeoutException {
-          printMsg =
-              '\n\n⚠ Printer ไม่ตอบสนอง (timeout)'; // ✅ Fix: จับ timeout แยก
         } catch (_) {
           printMsg = '\n\n⚠ เชื่อมต่อเครื่องปริ้นไม่ได้';
         }
