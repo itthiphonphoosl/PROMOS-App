@@ -4,8 +4,8 @@ import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
 
 class ApiService {
-  // static const String baseUrl = 'http://172.16.12.201:4030/api';
-  static const String baseUrl = 'http://172.100.11.10:4000/api';
+  static const String baseUrl = 'http://172.16.12.252:4030/api';
+  // static const String baseUrl = 'http://172.100.11.10:4000/api';
 
   static const String _defaultClientType = 'HH';
 
@@ -40,6 +40,17 @@ class ApiService {
   }
 
   // ── Auth ───────────────────────────────────────────────────
+  // Public — ดึง Station list สำหรับ login dropdown (ไม่ต้อง token)
+  static Future<http.Response> getPublicStations() async {
+    return http.get(
+      _u('/stations/public'),
+      headers: const {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+    );
+  }
+
   static Future<http.Response> login(
     String username,
     String password, {

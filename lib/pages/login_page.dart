@@ -5,16 +5,6 @@ import '../services/auth_storage.dart';
 import 'home_page.dart';
 import '../widgets/cooler_alert.dart';
 
-const List<Map<String, String>> _kStations = [
-  {'id': 'STA001', 'name': 'Casting'},
-  {'id': 'STA002', 'name': 'Heat treatment'},
-  {'id': 'STA003', 'name': 'Machine'},
-  {'id': 'STA004', 'name': 'Checker'},
-  {'id': 'STA005', 'name': 'Plating'},
-  {'id': 'STA006', 'name': 'Painting'},
-  {'id': 'STA007', 'name': 'Checker Assy'},
-];
-
 Map<String, dynamic> _safeJson(String body) {
   try {
     final d = jsonDecode(body);
@@ -34,6 +24,54 @@ class _LoginPageState extends State<LoginPage> {
   final _usernameCtrl = TextEditingController();
   String? _selectedStaId;
   bool _loading = false;
+
+  // ── Stations จาก API ─────────────────────────────────────
+  List<Map<String, String>> _stations = [];
+  bool _loadingStations = true;
+  String? _stationsError;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStations();
+  }
+
+  Future<void> _loadStations() async {
+    setState(() {
+      _loadingStations = true;
+      _stationsError = null;
+    });
+    try {
+      final res = await ApiService.getPublicStations();
+      if (res.statusCode == 200) {
+        final body = _safeJson(res.body);
+        final list = body['stations'];
+        if (list is List) {
+          setState(() {
+            _stations = list
+                .map(
+                  (e) => {
+                    'id': e['op_sta_id']?.toString() ?? '',
+                    'name': e['op_sta_name']?.toString() ?? '',
+                  },
+                )
+                .toList();
+            _loadingStations = false;
+          });
+          return;
+        }
+      }
+      setState(() {
+        _stationsError = 'ดึงข้อมูล Station ไม่ได้';
+        _loadingStations = false;
+      });
+    } catch (_) {
+      setState(() {
+        _stationsError = 'เชื่อมต่อ Server ไม่ได้';
+        _loadingStations = false;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -327,8 +365,11 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final selStation = _selectedStaId != null
-        ? _kStations.firstWhere((s) => s['id'] == _selectedStaId)
+    final selStation = _selectedStaId != null && _stations.isNotEmpty
+        ? _stations.firstWhere(
+            (s) => s['id'] == _selectedStaId,
+            orElse: () => <String, String>{},
+          )
         : null;
 
     return Scaffold(
@@ -416,61 +457,122 @@ class _LoginPageState extends State<LoginPage> {
                         const SizedBox(height: 16),
 
                         // ── Station Dropdown ───────────────
-                        DropdownButtonFormField<String>(
-                          value: _selectedStaId,
-                          decoration: const InputDecoration(
-                            labelText: 'Station',
-                            prefixIcon: Icon(Icons.location_on_outlined),
-                            border: OutlineInputBorder(),
-                          ),
-                          hint: const Text('เลือก Station'),
-                          isExpanded: true,
-                          menuMaxHeight: 320,
-                          items: _kStations.map((s) {
-                            return DropdownMenuItem<String>(
-                              value: s['id'],
-                              child: Row(
-                                children: [
-                                  // Badge STA00X
-                                  Container(
-                                    width: 60,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 6,
-                                      vertical: 3,
+                        if (_loadingStations)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Row(
+                              children: [
+                                SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                                SizedBox(width: 10),
+                                Text(
+                                  'กำลังโหลด Station...',
+                                  style: TextStyle(color: Colors.grey),
+                                ),
+                              ],
+                            ),
+                          )
+                        else if (_stationsError != null)
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: Colors.red.shade200,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.error_outline,
+                                      color: Colors.red,
+                                      size: 16,
                                     ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.indigo.shade50,
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: Colors.indigo.shade200,
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _stationsError!,
+                                        style: const TextStyle(
+                                          color: Colors.red,
+                                          fontSize: 13,
+                                        ),
                                       ),
                                     ),
-                                    child: Text(
-                                      s['id']!,
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.indigo,
-                                      ),
+                                    TextButton(
+                                      onPressed: _loadStations,
+                                      child: const Text('ลองใหม่'),
                                     ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Text(
-                                      s['name']!,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            );
-                          }).toList(),
-                          onChanged: (v) => setState(() => _selectedStaId = v),
-                        ),
+                            ],
+                          )
+                        else
+                          DropdownButtonFormField<String>(
+                            value: _selectedStaId,
+                            decoration: const InputDecoration(
+                              labelText: 'Station',
+                              prefixIcon: Icon(Icons.location_on_outlined),
+                              border: OutlineInputBorder(),
+                            ),
+                            hint: const Text('เลือก Station'),
+                            isExpanded: true,
+                            menuMaxHeight: 320,
+                            items: _stations.map((s) {
+                              return DropdownMenuItem<String>(
+                                value: s['id'],
+                                child: Row(
+                                  children: [
+                                    // Badge STA00X
+                                    Container(
+                                      width: 60,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.indigo.shade50,
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: Colors.indigo.shade200,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        s['id']!,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.indigo,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Text(
+                                        s['name']!,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }).toList(),
+                            onChanged: (v) =>
+                                setState(() => _selectedStaId = v),
+                          ),
 
                         // แสดง station ที่เลือก
-                        if (selStation != null) ...[
+                        if (selStation != null && selStation.isNotEmpty) ...[
                           const SizedBox(height: 10),
                           Container(
                             padding: const EdgeInsets.symmetric(
