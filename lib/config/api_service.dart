@@ -2,10 +2,9 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../services/auth_storage.dart';
 import '../services/app_nav.dart';
+import 'env.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://111.111.111.111:4030/api';
-
   static const String _defaultClientType = 'HH';
 
   static Uri _u(String path, [Map<String, String>? qp]) {
